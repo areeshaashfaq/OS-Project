@@ -1,0 +1,15 @@
+detectors:
+  - name: EmailPasswordPair
+    keywords:
+      - password
+      - passwd
+      - pwd
+    regex:
+      email: '[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}'
+      password: '(?i)(?:password|passwd|pwd)[=: ]+\S{6,}'
+
+  - name: BasicAuthUrl
+    keywords:
+      - '://'
+    regex:
+      url: '[A-Za-z][A-Za-z0-9+.\-]*://[^\s:@/]+:[^\s:@/]{4,}@[^\s/]+'

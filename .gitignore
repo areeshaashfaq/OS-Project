@@ -1,0 +1,7 @@
+findings*.json
+reports/
+reports_*/
+repos.txt
+sample_meta.csv
+__pycache__/
+testdata/
