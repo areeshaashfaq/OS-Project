@@ -46,8 +46,12 @@ def parseLine(line):
 
 def scanRepo(url, extraArgs):
     cmd = ["trufflehog", "git", url, "--json", "--no-verification", "--no-update"] + extraArgs
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    env["GIT_ASKPASS"] = "echo"
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
     except FileNotFoundError:
         raise RuntimeError("trufflehog not found on PATH, install it first (see README.md)")
     except subprocess.TimeoutExpired:
@@ -134,6 +138,28 @@ def writeReports(grouped, outDir):
     return written
 
 
+def loadProgress(path):
+    done = set()
+    findings = []
+    if not os.path.exists(path):
+        return done, findings
+    with open(path, "r", encoding="utf-8") as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                obj = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            repo = obj.get("repo")
+            if repo is None:
+                continue
+            done.add(repo)
+            findings.extend(obj.get("findings", []))
+    return done, findings
+
+
 def main():
     ap = argparse.ArgumentParser(description="scan public repos for exposed secrets and draft owner disclosures")
     src = ap.add_mutually_exclusive_group(required=True)
@@ -145,6 +171,8 @@ def main():
     ap.add_argument("--reports-dir", default="reports", help="per-repo disclosure drafts")
     ap.add_argument("--config", help="trufflehog custom detectors yaml (e.g. detectors.yaml)")
     ap.add_argument("--trufflehog-arg", action="append", default=[], help="extra arg passed to trufflehog")
+    ap.add_argument("--progress", default="scan_progress.jsonl",
+                    help="resume file written as it goes; delete it to start a scan fresh")
     args = ap.parse_args()
 
     if args.config:
@@ -158,24 +186,38 @@ def main():
         print("no repos to scan", file=sys.stderr)
         sys.exit(1)
 
-    print("scanning " + str(len(repos)) + " repo(s) with " + str(args.workers) + " worker(s)", file=sys.stderr)
-    allFindings = []
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futs = {pool.submit(scanRepo, url, args.trufflehog_arg): url for url in repos}
-        done = 0
-        for fut in as_completed(futs):
-            url = futs[fut]
-            done += 1
-            try:
-                _, findings, err = fut.result()
-            except RuntimeError as e:
-                print(str(e), file=sys.stderr)
-                sys.exit(2)
-            tag = str(len(findings)) + " finding(s)"
-            if err:
-                tag += " [" + err + "]"
-            print("[" + str(done) + "/" + str(len(repos)) + "] " + url + " -> " + tag, file=sys.stderr)
-            allFindings.extend(findings)
+    alreadyDone, allFindings = loadProgress(args.progress)
+    todo = [r for r in repos if r not in alreadyDone]
+    total = len(repos)
+    if alreadyDone:
+        print("resuming: " + str(len(alreadyDone)) + " already scanned, " + str(len(todo)) +
+              " left (delete " + args.progress + " to start fresh)", file=sys.stderr)
+    else:
+        print("scanning " + str(total) + " repo(s) with " + str(args.workers) + " worker(s)", file=sys.stderr)
+
+    progF = open(args.progress, "a", encoding="utf-8")
+    try:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futs = {pool.submit(scanRepo, url, args.trufflehog_arg): url for url in todo}
+            done = len(alreadyDone)
+            for fut in as_completed(futs):
+                url = futs[fut]
+                done += 1
+                try:
+                    _, findings, err = fut.result()
+                except RuntimeError as e:
+                    print(str(e), file=sys.stderr)
+                    progF.close()
+                    sys.exit(2)
+                tag = str(len(findings)) + " finding(s)"
+                if err:
+                    tag += " [" + err + "]"
+                print("[" + str(done) + "/" + str(total) + "] " + url + " -> " + tag, file=sys.stderr)
+                progF.write(json.dumps({"repo": url, "findings": findings}) + "\n")
+                progF.flush()
+                allFindings.extend(findings)
+    finally:
+        progF.close()
 
     grouped = {}
     for it in allFindings:
