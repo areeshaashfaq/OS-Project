@@ -23,6 +23,7 @@ def fingerprint(raw):
     return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:12]
 
 
+
 def parseLine(line):
     try:
         obj = json.loads(line)
@@ -31,7 +32,8 @@ def parseLine(line):
     if "SourceMetadata" not in obj:
         return None
     git = ((obj.get("SourceMetadata") or {}).get("Data") or {}).get("Git") or {}
-    raw = obj.get("Raw") or ""
+    raw = obj.get("Raw") or "" # The real data
+
     return {
         "repo": git.get("repository", ""),
         "file": git.get("file", ""),
@@ -39,11 +41,9 @@ def parseLine(line):
         "commit": git.get("commit", ""),
         "detector": obj.get("DetectorName", "unknown"),
         "verified": bool(obj.get("Verified", False)),
-        "maskedPreview": maskSecret(raw),
+        "raw_secret": raw,  # Renamed key for clarity
         "fingerprint": fingerprint(raw),
     }
-
-
 def scanRepo(url, extraArgs):
     cmd = ["trufflehog", "git", url, "--json", "--no-verification", "--no-update"] + extraArgs
     env = dict(os.environ)
