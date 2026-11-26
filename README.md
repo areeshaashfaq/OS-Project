@@ -104,10 +104,19 @@ export GITHUB_TOKEN=ghp_your_token_here
 **2. Run the automated pipeline**
 **Pass the random seed and the number of repositories you want to scan**
 **Change the seed (2, 3, 4...) to get completely new batches**
-python3 run_pipeline.py 2 
-python3 prepare_findings.py --input all_investigating_credentials.xlsx --output findings_annotated.csv
-python3 db_tester.py --input findings_annotated.csv --output verified_credentials.csv --workers 10
+
+**3. Prepare and Verify**
+cd db_verifier
+cp ../all_investigating_credentials.xlsx .
+python3 prepare_findings.py
+python3 verify_credentials.py --input findings_annotated.csv --output verified_credentials.csv --workers 10
+
+**4. Blast Radius Exploration**
+
 python3 db_read_only_explore.py
+
+
+This script connects to the successfully verified databases (the ones marked SUCCESS) and performs a read-only exploration. It lists the available databases and collections, samples a few documents to understand the data structure, and looks for sensitive fields (like passwords, emails, and tokens). The output file is db_exploration_results.xlsx
 
 ---
 
