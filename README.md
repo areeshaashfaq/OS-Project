@@ -79,7 +79,7 @@ python3 scan.py --repos-file repos_seed6.txt --workers 4 --progress scan_progres
 python3 check_secrets.py
 
 **5. Filter out the noise**
-**(IMPORTANT: Edit filter_credentials.py first to use credentials_seed6.jsonl and worth_investigating_seed6.jsonl)**
+**(IMPORTANT: Edit filter_credentials.py first to use credentials_seed2.jsonl and worth_investigating_seed2.jsonl)**
 python3 filter_credentials.py
 
 **6. Generate the Excel spreadsheet**
