@@ -6,7 +6,6 @@ import os
 
 async def main():
     # 1. Load Data
-    # Change source_type to "json" and file_path to "findings.json" when ready
     credentials = load_credentials(source_type="mock", file_path="findings.json")
     
     if not credentials:
@@ -16,11 +15,10 @@ async def main():
     print(f"Loaded {len(credentials)} credentials.")
     
     # 2. Initialize Engine
-    engine = GmailVerificationEngine(headless=True, use_captcha_solver=False)
+    engine = GmailVerificationEngine(headless=True) # <--- Fixed
     await engine.start()
     
     # 3. Run Verification
-    # Concurrency of 3 is safe for testing. Increase to 5-10 for production with proxies.
     results = await engine.run_batch(credentials, concurrency=3)
     
     # 4. Save Results
