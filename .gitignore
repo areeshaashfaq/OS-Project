@@ -2,3 +2,14 @@
 sample_meta.csv
 __pycache__/
 testdata/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.jsonl
+findings*.json
+credentials_extracted*
+all_investigating_credentials.xlsx
+unmasked_secrets.txt
+.env
+reports/

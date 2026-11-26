@@ -41,7 +41,8 @@ def parseLine(line):
         "commit": git.get("commit", ""),
         "detector": obj.get("DetectorName", "unknown"),
         "verified": bool(obj.get("Verified", False)),
-        "raw_secret": raw,  # Renamed key for clarity
+        "raw_secret": raw,
+        "maskedPreview": maskSecret(raw),
         "fingerprint": fingerprint(raw),
     }
 def scanRepo(url, extraArgs):
@@ -98,6 +99,10 @@ def writeReports(grouped, outDir):
     os.makedirs(outDir, exist_ok=True)
     written = []
     for repo, items in grouped.items():
+        # Only generate a report if there is a high-value credential type
+        high_value_detectors = {"MongoDB", "Postgres", "JDBC", "MySQL", "Redis", "Gitlab", "AWS", "Slack", "Stripe", "GitHub", "Heroku", "SendGrid"}
+        if not any(it.get("detector") in high_value_detectors for it in items):
+            continue
         slug = repo.rstrip("/").split("/")[-1].replace(".git", "") or "repo"
         safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in slug)
         path = os.path.join(outDir, safe + ".md")
@@ -119,7 +124,8 @@ def writeReports(grouped, outDir):
             if it["line"]:
                 loc += ":" + str(it["line"])
             lines.append("  - " + loc)
-            lines.append("    type: " + it["detector"] + "   preview: " + it["maskedPreview"])
+            preview = it.get("maskedPreview") or maskSecret(it.get("raw_secret", ""))
+            lines.append("    type: " + it["detector"] + "   preview: " + preview)
             if it["commit"]:
                 lines.append("    first seen in commit: " + it["commit"][:12])
         lines.append("")
