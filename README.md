@@ -80,6 +80,9 @@ export GITHUB_TOKEN=ghp_your_token_here
 **Pass the random seed and the number of repositories you want to scan**
 **Change the seed (2, 3, 4...) to get completely new batches**
 python3 run_pipeline.py 2 
+python3 prepare_findings.py --input all_investigating_credentials.xlsx --output findings_annotated.csv
+python3 db_tester.py --input findings_annotated.csv --output verified_credentials.csv --workers 10
+python3 db_read_only_explore.py
 
 ## 🚀 Pipeline Execution
 
