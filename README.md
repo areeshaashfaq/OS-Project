@@ -65,24 +65,24 @@ pip install pandas openpyxl
 ---
 
 ## 🚀 Full Pipeline Execution Flow
-# 1. Set GitHub token (to avoid API rate limits)
+**1. Set GitHub token (to avoid API rate limits)**
 export GITHUB_TOKEN=ghp_your_token_here
 
-# 2. Discover 200 random repos (change seed 6 to 7, 8, etc., for new batches)
+**2. Discover 200 random repos (change seed 6 to 7, 8, etc., for new batches)**
 python3 sample_github_api.py --sample 200 --seed 2 --out repos_seed2.txt
 
-# 3. Scan the repos with TruffleHog
+**3. Scan the repos with TruffleHog**
 python3 scan.py --repos-file repos_seed6.txt --workers 4 --progress scan_progress_seed2.jsonl
 
-# 4. Extract credentials 
-# (IMPORTANT: Edit check_secrets.py first to use scan_progress_seed2.jsonl and credentials_seed2.jsonl)
+**4. Extract credentials**
+**(IMPORTANT: Edit check_secrets.py first to use scan_progress_seed2.jsonl and credentials_seed2.jsonl)**
 python3 check_secrets.py
 
-# 5. Filter out the noise
-# (IMPORTANT: Edit filter_credentials.py first to use credentials_seed6.jsonl and worth_investigating_seed6.jsonl)
+**5. Filter out the noise**
+**(IMPORTANT: Edit filter_credentials.py first to use credentials_seed6.jsonl and worth_investigating_seed6.jsonl)**
 python3 filter_credentials.py
 
-# 6. Generate the Excel spreadsheet
+**6. Generate the Excel spreadsheet**
 python3 make_excel.py
 
 
