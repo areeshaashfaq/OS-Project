@@ -1,307 +1,522 @@
 import pandas as pd
-import json
-import random
-import socket
+import logging
 import time
-from urllib.parse import urlparse, unquote
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
-import psycopg2
-import socks
+import concurrent.futures
+import socket
+from urllib.parse import unquote
+from typing import Dict, Optional, Tuple
 
-# --- PROXY POOL ---
-# Format: "host:port" for SOCKS5
-# If you don't have proxies, leave this empty.
-PROXY_POOL = [
-    # Add more SOCKS5 proxies here
-]
+# --- OPTIONAL DATABASE DRIVERS ---
+try:
+    from pymongo import MongoClient
+    from pymongo.errors import PyMongoError
+    HAS_MONGO = True
+except ImportError:
+    HAS_MONGO = False
 
-def get_proxy():
-    if not PROXY_POOL:
-        return None
-    return random.choice(PROXY_POOL)
+try:
+    import psycopg2
+    from psycopg2 import OperationalError
+    HAS_POSTGRES = True
+except ImportError:
+    HAS_POSTGRES = False
 
-def set_socks_proxy(proxy_addr):
-    """
-    Sets the global socket to use a SOCKS5 proxy.
-    """
-    if not proxy_addr:
-        return
-    host, port = proxy_addr.split(':')
-    socks.set_default_proxy(socks.PROXY_TYPE_SOCKS5, host, int(port))
-    socket.socket = socks.socksocket
+try:
+    import pymysql
+    from pymysql import err as pymysql_err
+    HAS_MYSQL = True
+except ImportError:
+    HAS_MYSQL = False
 
-def reset_socks_proxy():
-    """
-    Resets the global socket to normal.
-    """
-    socket.socket = socket.socket
-    socks.set_default_proxy(None)
+try:
+    import redis
+    from redis.exceptions import RedisError
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
 
-def parse_connection_string(conn_string):
-    """
-    Parses a connection string to extract host, port, and credentials.
-    Handles MongoDB replica sets (multiple hosts) by extracting the first host.
-    """
-    # Handle mongodb+srv:// specially
-    if conn_string.startswith("mongodb+srv://"):
-        # mongodb+srv://user:pass@host/db?opts
-        # Remove protocol
-        parsed = urlparse(conn_string)
-        host = parsed.hostname
-        port = 27017  # Default for Atlas
-        user = unquote(parsed.username) if parsed.username else None
-        pass_ = unquote(parsed.password) if parsed.password else None
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- CONFIGURATION ---
+TIMEOUT = 5  # Seconds
+MAX_WORKERS = 10  # Concurrency level
+
+class CredentialVerifier:
+    def __init__(self, input_file: str, output_file: str):
+        self.input_file = input_file
+        self.output_file = output_file
         
-    elif conn_string.startswith("mongodb://"):
-        # Handle multi-host connection strings (replica sets)
-        # Example: mongodb://user:pass@host1:27017,host2:27017,host3:27017/db
-        # We only need the first host for testing
-        if '@' in conn_string:
-            # Split off the auth part
-            auth_part, rest = conn_string.split('@', 1)
-            # The rest contains the host(s) and database
-            # Find the first host:port pair
-            # Look for the first comma or slash
-            first_host_part = rest.split(',')[0].split('/')[0]
+        # Load input data
+        self.df = pd.read_csv(input_file)
+        logger.info(f"Loaded {len(self.df)} records from {input_file}")
+
+        # Initialize verified_keys to an empty set by default
+        self.verified_keys = set()
+
+        # Resume logic: Load existing results if they exist
+        try:
+            self.results_df = pd.read_csv(output_file)
+            # Create a set of verified keys for fast lookup
+            self.verified_keys = set(zip(
+                self.results_df['repo'].fillna(''), 
+                self.results_df['file'].fillna(''), 
+                self.results_df['line'].fillna('')
+            ))
+            logger.info(f"Resuming: {len(self.verified_keys)} items already verified.")
+        except FileNotFoundError:
+            self.results_df = pd.DataFrame(columns=[
+                'status', 'error', 'repo', 'user_id', 'file', 'line', 'commit', 
+                'server_version', 'latency_ms', 'host', 'port', 'protocol'
+            ])
+            logger.info(f"Output file {output_file} not found. Starting fresh.")
+
+    def _extract_creds(self, source_secret: str) -> Optional[Dict]:
+        """
+        Robustly extracts user, pass, host, port, protocol from a connection string.
+        Handles multi-host replica sets by extracting the first host.
+        """
+        if not source_secret:
+            return None
+
+        conn = source_secret.strip()
+        
+        # Detect Protocol & Default Port
+        protocol = 'unknown'
+        default_port = 0
+        
+        if conn.startswith('mongodb+srv://'):
+            protocol = 'mongodb'
+            default_port = 27017
+        elif conn.startswith('mongodb://'):
+            protocol = 'mongodb'
+            default_port = 27017
+        elif conn.startswith('postgresql://') or conn.startswith('postgres://'):
+            protocol = 'postgres'
+            default_port = 5432
+        elif conn.startswith('mysql://'):
+            protocol = 'mysql'
+            default_port = 3306
+        elif conn.startswith('redis://') or conn.startswith('rediss://'):
+            protocol = 'redis'
+            default_port = 6379
+        elif conn.startswith('http://') or conn.startswith('https://'):
+            protocol = 'http'
+            default_port = 443 if conn.startswith('https') else 80
+        else:
+            return None
+
+        # Extract User:Pass
+        after_proto = conn.split('://', 1)[1]
+        
+        user = None
+        password = None
+        
+        if '@' in after_proto:
+            auth_part, host_part = after_proto.rsplit('@', 1)
             
-            # Parse the first host:port
-            if ':' in first_host_part:
-                host, port_str = first_host_part.rsplit(':', 1)
+            if ':' in auth_part:
+                user, password = auth_part.split(':', 1)
+            else:
+                user = auth_part
+                password = ""
+            
+            user = unquote(user)
+            password = unquote(password)
+        else:
+            host_part = after_proto
+            user = None
+            password = None
+
+        # Extract Host and Port
+        # Remove query params and path
+        host_str = host_part.split('/', 1)[0].split('?', 1)[0]
+        
+        host = None
+        port = default_port
+        
+        # Handle multi-host replica sets (comma-separated)
+        # We only need the first host for the initial test
+        if ',' in host_str:
+            host_str = host_str.split(',')[0]
+
+        if ':' in host_str:
+            # Handle IPv6 [::1]:port
+            if host_str.startswith('['):
+                bracket_end = host_str.find(']')
+                if bracket_end != -1:
+                    host = host_str[1:bracket_end]
+                    port_str = host_str[bracket_end+1:].lstrip(':')
+                    if port_str:
+                        try: port = int(port_str)
+                        except: pass
+            else:
+                host, port_str = host_str.rsplit(':', 1)
                 try:
                     port = int(port_str)
                 except ValueError:
-                    port = 27017
-            else:
-                host = first_host_part
-                port = 27017
-                
-            # Extract user:pass from auth_part
-            if ':' in auth_part:
-                user, pass_ = auth_part.rsplit(':', 1)
-                user = unquote(user)
-                pass_ = unquote(pass_)
-            else:
-                user = unquote(auth_part)
-                pass_ = None
+                    host = host_str
         else:
-            # No auth part
-            parsed = urlparse(conn_string)
-            host = parsed.hostname
-            port = parsed.port or 27017
-            user = None
-            pass_ = None
-            
-    elif conn_string.startswith("postgresql://"):
-        parsed = urlparse(conn_string)
-        host = parsed.hostname
-        port = parsed.port or 5432
-        user = unquote(parsed.username) if parsed.username else None
-        pass_ = unquote(parsed.password) if parsed.password else None
-    else:
-        return None
-    
-    return {
-        "host": host,
-        "port": port,
-        "user": user,
-        "password": pass_,
-        "original": conn_string
-    }
+            host = host_str
 
-def is_private_host(host):
-    """
-    Checks if a host is a private IP or a known Docker service name.
-    """
-    # Check for Docker service names
-    if host in ["mongo", "postgres", "postgresql", "db", "database"]:
-        return True
-        
-    # Check for private IP ranges
-    try:
-        import ipaddress
-        ip = ipaddress.ip_address(host)
-        return ip.is_private or ip.is_loopback or ip.is_reserved
-    except ValueError:
-        # It's a domain name, not an IP. Assume public unless it fails to resolve.
-        return False
+        if not host:
+            return None
 
-def check_host_reachability(host, port, proxy_addr=None, timeout=5):
-    """
-    Checks if a host is reachable on a specific port, optionally through a proxy.
-    """
-    set_socks_proxy(proxy_addr)
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except (socket.timeout, ConnectionRefusedError, OSError) as e:
-        return False
-    finally:
-        reset_socks_proxy()
+        return {
+            'protocol': protocol,
+            'host': host,
+            'port': port,
+            'user': user,
+            'password': password,
+            'original': source_secret
+        }
 
-def test_mongodb_connection(conn_string, timeout=5, proxy_addr=None):
-    """
-    Tests a MongoDB connection string.
-    """
-    result = {
-        "status": "UNKNOWN",
-        "error": None,
-        "server_version": None
-    }
-    
-    set_socks_proxy(proxy_addr)
-    try:
-        # serverSelectionTimeoutMS: Don't wait forever if the host is unreachable
-        client = MongoClient(conn_string, serverSelectionTimeoutMS=timeout * 1000)
-        
-        # Force a connection by running a command
-        client.admin.command('ping')
-        
-        # Get server info
-        server_info = client.server_info()
-        result["server_version"] = server_info.get("version")
-        result["status"] = "SUCCESS"
-        
-    except PyMongoError as e:
-        error_str = str(e)
-        if "Authentication failed" in error_str or "AuthenticationFailed" in error_str:
-            result["status"] = "INVALID_CREDENTIALS"
-        elif "ServerSelectionTimeout" in error_str:
-            result["status"] = "UNREACHABLE"
-        else:
-            result["status"] = "FAILED"
-        result["error"] = error_str
-    finally:
-        reset_socks_proxy()
+    def _check_dns(self, host: str) -> Tuple[bool, str]:
+        """
+        Quick DNS check. Returns (success, error_message).
+        """
         try:
+            socket.gethostbyname(host)
+            return True, "OK"
+        except socket.gaierror as e:
+            return False, f"DNS_FAIL: {e}"
+        except Exception as e:
+            return False, f"DNS_ERROR: {e}"
+
+    def _test_mongodb(self, creds: Dict) -> Dict:
+        if not HAS_MONGO:
+            return {"status": "SKIPPED", "error": "Pymongo not installed", "server_version": None}
+        
+        try:
+            client = MongoClient(
+                creds['original'], 
+                serverSelectionTimeoutMS=TIMEOUT*1000, 
+                connectTimeoutMS=TIMEOUT*1000
+            )
+            client.admin.command('ping')
+            server_info = client.server_info()
             client.close()
-        except:
-            pass
-    return result
+            return {"status": "SUCCESS", "server_version": server_info.get('version'), "error": None}
+        except PyMongoError as e:
+            err_str = str(e)
+            # Specific Atlas SRV Lookup Failure
+            if "The DNS query name does not exist" in err_str and "_mongodb._tcp" in err_str:
+                return {"status": "CLUSTER_DELETED", "server_version": None, "error": "Atlas SRV record missing"}
+            elif "Authentication failed" in err_str or "AuthenticationFailed" in err_str or "bad auth" in err_str:
+                return {"status": "INVALID_CREDENTIALS", "server_version": None, "error": err_str}
+            elif "ServerSelectionTimeout" in err_str or "timed out" in err_str.lower():
+                return {"status": "TIMEOUT_OR_FIREWALL", "server_version": None, "error": err_str}
+            else:
+                return {"status": "FAILED", "server_version": None, "error": err_str}
+        except Exception as e:
+            return {"status": "ERROR", "server_version": None, "error": str(e)}
+    def _test_postgres(self, creds: Dict) -> Dict:
+        if not HAS_POSTGRES:
+            return {"status": "SKIPPED", "error": "Psycopg2 not installed", "server_version": None}
+        
+        try:
+            conn = psycopg2.connect(
+                host=creds['host'],
+                port=creds['port'],
+                user=creds['user'],
+                password=creds['password'],
+                connect_timeout=TIMEOUT
+            )
+            with conn.cursor() as cur:
+                cur.execute("SELECT version();")
+                version = cur.fetchone()[0]
+            conn.close()
+            return {"status": "SUCCESS", "server_version": version, "error": None}
+        except OperationalError as e:
+            err_str = str(e)
+            if "password authentication failed" in err_str:
+                return {"status": "INVALID_CREDENTIALS", "server_version": None, "error": err_str}
+            elif "timeout" in err_str.lower() or "could not connect" in err_str.lower():
+                return {"status": "TIMEOUT_OR_FIREWALL", "server_version": None, "error": err_str}
+            else:
+                return {"status": "FAILED", "server_version": None, "error": err_str}
+        except Exception as e:
+            return {"status": "ERROR", "server_version": None, "error": str(e)}
 
-def test_postgres_connection(conn_string, timeout=5, proxy_addr=None):
-    """
-    Tests a PostgreSQL connection string.
-    """
-    result = {
-        "status": "UNKNOWN",
-        "error": None,
-        "server_version": None
-    }
-    
-    set_socks_proxy(proxy_addr)
-    try:
-        # Create a connection
-        conn = psycopg2.connect(conn_string, connect_timeout=timeout)
+    def _test_mysql(self, creds: Dict) -> Dict:
+        if not HAS_MYSQL:
+            return {"status": "SKIPPED", "error": "PyMySQL not installed", "server_version": None}
         
-        # Run a simple query
-        with conn.cursor() as cur:
-            cur.execute("SELECT version();")
-            version_row = cur.fetchone()
-            result["server_version"] = version_row[0]
-            result["status"] = "SUCCESS"
-        
-        conn.close()
-        
-    except psycopg2.OperationalError as e:
-        error_str = str(e)
-        if "password authentication failed" in error_str:
-            result["status"] = "INVALID_CREDENTIALS"
-        elif "timeout" in error_str.lower() or "could not connect" in error_str.lower():
-            result["status"] = "UNREACHABLE"
-        else:
-            result["status"] = "FAILED"
-        result["error"] = error_str
-    finally:
-        reset_socks_proxy()
-    return result
+        try:
+            conn = pymysql.connect(
+                host=creds['host'],
+                port=creds['port'],
+                user=creds['user'],
+                password=creds['password'],
+                connect_timeout=TIMEOUT
+            )
+            with conn.cursor() as cur:
+                cur.execute("SELECT VERSION();")
+                version = cur.fetchone()[0]
+            conn.close()
+            return {"status": "SUCCESS", "server_version": version, "error": None}
+        except pymysql_err.OperationalError as e:
+            err_str = str(e)
+            if "Access denied" in err_str or "1045" in err_str:
+                return {"status": "INVALID_CREDENTIALS", "server_version": None, "error": err_str}
+            elif "timed out" in err_str.lower() or "unable to connect" in err_str.lower():
+                return {"status": "TIMEOUT_OR_FIREWALL", "server_version": None, "error": err_str}
+            else:
+                return {"status": "FAILED", "server_version": None, "error": err_str}
+        except Exception as e:
+            return {"status": "ERROR", "server_version": None, "error": str(e)}
 
-def test_all_findings(input_file="findings_annotated.csv", output_file="verified_results.csv"):
-    df = pd.read_csv(input_file)
-    
-    # Filter for database-related findings
-    db_df = df[df['detector'].str.contains('MongoDB|Postgres', case=False, na=False)]
-    
-    results = []
-    for index, row in db_df.iterrows():
-        conn_string = row['source_secret']
-        detector = row['detector']
+    def _test_redis(self, creds: Dict) -> Dict:
+        if not HAS_REDIS:
+            return {"status": "SKIPPED", "error": "Redis not installed", "server_version": None}
         
-        # Parse connection string
-        parsed = parse_connection_string(conn_string)
-        if not parsed:
-            results.append({
-                "status": "PARSE_ERROR",
-                "error": "Could not parse connection string",
-                "repo": row['repo'],
-                "user_id": row['user_id'],
-                "file": row['file'],
-                "line": row['line'],
-                "commit": row['commit']
-            })
-            continue
-            
-        # Check if host is private
-        if is_private_host(parsed['host']):
-            results.append({
-                "status": "PRIVATE_HOST",
-                "error": f"Host {parsed['host']} is private or a Docker service name",
-                "repo": row['repo'],
-                "user_id": row['user_id'],
-                "file": row['file'],
-                "line": row['line'],
-                "commit": row['commit']
-            })
-            continue
-            
-        # Get a proxy
-        proxy_addr = get_proxy()
-        
-        print(f"[TESTING] {detector}: {parsed['host']}:{parsed['port']} (Proxy: {proxy_addr or 'DIRECT'})")
-        
-        # Check reachability first
-        if not check_host_reachability(parsed['host'], parsed['port'], proxy_addr):
-            results.append({
-                "status": "UNREACHABLE",
-                "error": "Host not reachable",
-                "repo": row['repo'],
-                "user_id": row['user_id'],
-                "file": row['file'],
-                "line": row['line'],
-                "commit": row['commit']
-            })
-            continue
-            
-        # Test credentials
-        if "MongoDB" in detector:
-            result = test_mongodb_connection(conn_string, proxy_addr=proxy_addr)
-        elif "Postgres" in detector:
-            result = test_postgres_connection(conn_string, proxy_addr=proxy_addr)
+        try:
+            r = redis.Redis(
+                host=creds['host'],
+                port=creds['port'],
+                password=creds['password'],
+                socket_timeout=TIMEOUT,
+                socket_connect_timeout=TIMEOUT
+            )
+            r.ping()
+            info = r.info('server')
+            version = info.get('redis_version')
+            return {"status": "SUCCESS", "server_version": version, "error": None}
+        except redis.exceptions.AuthenticationError as e:
+            return {"status": "INVALID_CREDENTIALS", "server_version": None, "error": str(e)}
+        except RedisError as e:
+            err_str = str(e)
+            if "timed out" in err_str.lower():
+                return {"status": "TIMEOUT_OR_FIREWALL", "server_version": None, "error": err_str}
+            else:
+                return {"status": "FAILED", "server_version": None, "error": err_str}
+        except Exception as e:
+            return {"status": "ERROR", "server_version": None, "error": str(e)}
+
+    def _test_http_basic_auth(self, creds: Dict) -> Dict:
+        if not HAS_REQUESTS:
+            return {"status": "SKIPPED", "error": "Requests not installed", "server_version": None}
+
+        scheme = 'https' if creds['port'] == 443 else 'http'
+        if (creds['port'] == 80 and scheme == 'http') or (creds['port'] == 443 and scheme == 'https'):
+            base_url = f"{scheme}://{creds['host']}"
         else:
-            result = {"status": "SKIPPED", "error": "Unknown database type"}
+            base_url = f"{scheme}://{creds['host']}:{creds['port']}"
+        
+        url = base_url + "/"
+        
+        try:
+            response = requests.get(
+                url, 
+                auth=(creds['user'], creds['password']),
+                timeout=TIMEOUT,
+                allow_redirects=False
+            )
             
-        result["repo"] = row['repo']
-        result["user_id"] = row['user_id']
-        result["file"] = row['file']
-        result["line"] = row['line']
-        result["commit"] = row['commit']
-        results.append(result)
+            status_code = response.status_code
+            
+            if 200 <= status_code < 300:
+                return {"status": "SUCCESS", "server_version": f"HTTP {status_code}", "error": None}
+            elif 300 <= status_code < 400:
+                return {"status": "SUCCESS_REDIRECT", "server_version": f"HTTP {status_code}", "error": None}
+            elif status_code in [401, 403]:
+                return {"status": "INVALID_CREDENTIALS", "server_version": f"HTTP {status_code}", "error": "Access Denied"}
+            elif status_code == 404:
+                return {"status": "PATH_NOT_FOUND", "server_version": f"HTTP {status_code}", "error": "Server reachable, path missing"}
+            else:
+                return {"status": "FAILED", "server_version": f"HTTP {status_code}", "error": "Unexpected Status"}
+                
+        except requests.exceptions.Timeout:
+            return {"status": "TIMEOUT_OR_FIREWALL", "server_version": None, "error": "Request Timeout"}
+        except requests.exceptions.ConnectionError as e:
+            return {"status": "CONNECTION_ERROR", "server_version": None, "error": str(e)}
+        except Exception as e:
+            return {"status": "ERROR", "server_version": None, "error": str(e)}
+
+    def _verify_single(self, row: pd.Series) -> Dict:
+        """
+        Main verification logic for a single row.
+        """
+        key = (row['repo'], row['file'], row['line'])
         
-        print(f"[DONE] {result['status']}: {result['error']}")
+        # Check if already verified
+        if key in self.verified_keys:
+            return None
+
+        source_secret = row['source_secret']
         
-        # Small delay to avoid rate limiting
-        time.sleep(random.uniform(1, 3))
-    
-    # Save results
-    results_df = pd.DataFrame(results)
-    results_df.to_csv(output_file, index=False)
-    print(f"Results saved to {output_file}")
+        # Quick filter: Only verify if it looks like a connection string
+        if not source_secret or '://' not in source_secret:
+            return {
+                'status': 'SKIPPED', 'error': 'No URI detected', 
+                'repo': row['repo'], 'user_id': row['user_id'], 'file': row['file'], 
+                'line': row['line'], 'commit': row['commit'], 'server_version': None,
+                'latency_ms': 0, 'host': None, 'port': None, 'protocol': None
+            }
+
+        creds = self._extract_creds(source_secret)
+        
+        if not creds:
+            return {
+                'status': 'PARSE_ERROR', 'error': 'Failed to parse credentials', 
+                'repo': row['repo'], 'user_id': row['user_id'], 'file': row['file'], 
+                'line': row['line'], 'commit': row['commit'], 'server_version': None,
+                'latency_ms': 0, 'host': None, 'port': None, 'protocol': None
+            }
+
+        host = creds['host']
+        port = creds['port']
+        protocol = creds['protocol']
+
+        # Private/Docker Host Check
+        if host in ['localhost', '127.0.0.1', 'mongo', 'postgres', 'db', 'database', 'redis', 'mysql', 'postgresql']:
+            return {
+                'status': 'INTERNAL_HOST', 'error': f"Host {host} is internal/docker service name", 
+                'repo': row['repo'], 'user_id': row['user_id'], 'file': row['file'], 
+                'line': row['line'], 'commit': row['commit'], 'server_version': None,
+                'latency_ms': 0, 'host': host, 'port': port, 'protocol': protocol
+            }
+
+        # DNS Check (Optional but helpful for fast fails)
+        # Skip DNS check for mongodb+srv as it requires TXT record lookup
+        if protocol != 'mongodb' or 'mongodb+srv' not in source_secret:
+            dns_ok, dns_msg = self._check_dns(host)
+            if not dns_ok:
+                return {
+                    'status': 'DNS_FAIL', 'error': dns_msg, 
+                            'repo': row['repo'], 'user_id': row['user_id'], 'file': row['file'], 
+                    'line': row['line'], 'commit': row['commit'], 'server_version': None,
+                    'latency_ms': 0, 'host': host, 'port': port, 'protocol': protocol
+                }
+
+        start_time = time.time()
+        
+        # Dispatch to correct tester
+        if protocol == 'mongodb':
+            result = self._test_mongodb(creds)
+        elif protocol == 'postgres':
+            result = self._test_postgres(creds)
+        elif protocol == 'mysql':
+            result = self._test_mysql(creds)
+        elif protocol == 'redis':
+            result = self._test_redis(creds)
+        elif protocol in ['http', 'https']:
+            result = self._test_http_basic_auth(creds)
+        else:
+            result = {
+                "status": "UNSUPPORTED_PROTOCOL", 
+                "server_version": None, 
+                "error": f"Protocol {protocol} not supported"
+            }
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Construct final result row
+        final_result = {
+            'status': result['status'],
+            'error': result.get('error'),
+            'repo': row['repo'],
+            'user_id': row['user_id'],
+            'file': row['file'],
+            'line': row['line'],
+            'commit': row['commit'],
+            'server_version': result.get('server_version'),
+            'latency_ms': latency_ms,
+            'host': host,
+            'port': port,
+            'protocol': protocol
+        }
+        
+        # Log specific interesting findings
+        if result['status'] == 'SUCCESS':
+            logger.info(f"[VERIFIED] {protocol}://{creds['user']}@{host}:{port} (Latency: {latency_ms}ms)")
+        elif result['status'] == 'INVALID_CREDENTIALS':
+            logger.info(f"[INVALID] {protocol}://{creds['user']}@{host}:{port} - Auth Failed")
+            
+        return final_result
+
+    def run(self):
+        """
+        Executes the verification process using a thread pool.
+        """
+        # Prepare list of indices to process
+        indices_to_process = []
+        for idx, row in self.df.iterrows():
+            key = (row['repo'], row['file'], row['line'])
+            if key not in self.verified_keys:
+                indices_to_process.append(idx)
+
+        if not indices_to_process:
+            logger.info("No new items to verify.")
+            return
+
+        logger.info(f"Starting verification for {len(indices_to_process)} items with {MAX_WORKERS} workers...")
+        
+        new_results = []
+        
+        # Use ThreadPoolExecutor for I/O bound network tasks
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_idx = {
+                executor.submit(self._verify_single, self.df.loc[idx]): idx 
+                for idx in indices_to_process
+            }
+            
+            # Process as they complete
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    result = future.result()
+                    if result:
+                        new_results.append(result)
+                        # Small pause to avoid overwhelming a single host if many creds point to same IP
+                        if len(new_results) % 50 == 0:
+                            time.sleep(0.1)
+                except Exception as exc:
+                    logger.error(f"Row {idx} generated an exception: {exc}")
+                    row = self.df.loc[idx]
+                    new_results.append({
+                        'status': 'EXCEPTION',
+                        'error': str(exc),
+                        'repo': row['repo'],
+                        'user_id': row['user_id'],
+                        'file': row['file'],
+                        'line': row['line'],
+                        'commit': row['commit'],
+                        'server_version': None,
+                        'latency_ms': 0,
+                        'host': None,
+                        'port': None,
+                        'protocol': None
+                    })
+
+        if new_results:
+            new_df = pd.DataFrame(new_results)
+            # Append to existing results
+            self.results_df = pd.concat([self.results_df, new_df], ignore_index=True)
+            
+            # Save to disk
+            self.results_df.to_csv(self.output_file, index=False)
+            logger.info(f"Saved {len(new_results)} new results. Total verified: {len(self.results_df)}")
+        else:
+            logger.info("No new results to save.")
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Test database credentials from findings.")
-    parser.add_argument("--input", default="findings_annotated.csv", help="Input CSV file")
-    parser.add_argument("--output", default="verified_results.csv", help="Output CSV file")
+    parser = argparse.ArgumentParser(description="Verify extracted credentials against live services.")
+    parser.add_argument("--input", default="findings_annotated.csv", help="Input CSV file with extracted credentials")
+    parser.add_argument("--output", default="verified_credentials.csv", help="Output CSV file for verification results")
+    parser.add_argument("--workers", type=int, default=MAX_WORKERS, help="Number of concurrent workers")
     args = parser.parse_args()
     
-    test_all_findings(args.input, args.output)
+    # Override global MAX_WORKERS if provided
+
+    MAX_WORKERS = args.workers
+    
+    verifier = CredentialVerifier(args.input, args.output)
+    verifier.run()
