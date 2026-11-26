@@ -217,58 +217,12 @@ Uses pandas and openpyxl to consolidate research records from multiple `worth_in
 
 All findings must be handled ethically, securely, and legally.
 
-### 1. Do Not Log In
-
-Never attempt to authenticate against third-party services using discovered credentials.
-
-Potential credential validity must be confirmed by the repository owner or an explicitly authorized security team.
-
-### 2. Report the Exposure
-
-Navigate to the repository's **Security** tab and use its private vulnerability reporting mechanism where available.
-
-If private vulnerability reporting is unavailable, contact the maintainer through an approved security contact channel.
-
-Do not disclose credential values in public GitHub issues.
-
-### 3. Provide Relevant Information
-
-Responsible disclosure should include:
-
-- Affected repository.
-- File path.
-- Line number.
-- Commit hash.
-- Credential type.
-- Recommended remediation steps.
-
-Repository owners should be advised to rotate or revoke affected credentials and remove sensitive information from Git history.
-
-### 4. Protect Research Data
-
-- Do not publish plaintext credentials.
-- Do not commit sensitive scan outputs to GitHub.
-- Restrict access to research datasets.
-- Use redacted records in reports and presentations.
-
 ---
 
-## 🔍 What This Pipeline Deliberately Does NOT Do
-
-| Limitation | Description |
-|---|---|
-| No Credential Verification | Does not test credentials against live services or attempt authentication. |
-| No Automated Reporting | Does not automatically email or message repository maintainers. |
-| No Unauthorized Access | Does not use discovered credentials to access third-party accounts or systems. |
-| No Guarantee of Validity | A detected credential may be expired, synthetic, or a false positive. |
-
-All findings require appropriate review before responsible disclosure.
-
----
 
 ## 🎯 Research Objective
 
-The objective of this project is to study accidental credential exposure in GitHub repositories, understand the limitations of automated secret detection, reduce false positives, and support responsible vulnerability disclosure.
+The objective of this project is to study accidental credential exposure in GitHub repositories, understand the limitations of automated secret detection, reduce false positive.
 
 The pipeline provides a structured approach to repository sampling, secret detection, credential classification, noise reduction, and research reporting.
 
