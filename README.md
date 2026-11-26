@@ -64,6 +64,15 @@ pip install pandas openpyxl
 
 ---
 
+## 🚀 Full Pipeline Execution Flow
+**1. Set GitHub token (to avoid API rate limits)**
+export GITHUB_TOKEN=ghp_your_token_here
+
+**2. Run the automated pipeline**
+**Pass the random seed and the number of repositories you want to scan**
+**Change the seed (2, 3, 4...) to get completely new batches**
+python3 run_pipeline.py 2 
+
 ## 🚀 Pipeline Execution
 
 The pipeline is divided into five sequential steps.

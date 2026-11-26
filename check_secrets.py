@@ -9,10 +9,8 @@ Extract user_id/password credentials from scan_progress.jsonl.
 """
 import json
 import re
+import sys
 from collections import Counter
-
-IN_PATH  = "scan_progress_seed5.jsonl"
-OUT_PATH = "credentials_extracted_3.jsonl"
 
 # ---- What we WANT -------------------------------------------------
 KEEP_DETECTORS = {"JDBC", "MongoDB", "Postgres", "Gitlab", "MySQL", "Redis"}
@@ -75,11 +73,11 @@ def extract_from_raw(raw: str):
         out.append((user, pw))
     return out
 
-def main():
+def main(input_file, output_file):
     stats = Counter()
     kept = []
 
-    with open(IN_PATH, "r", encoding="utf-8") as f:
+    with open(input_file, "r", encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -146,14 +144,17 @@ def main():
                     })
                     stats["kept"] += 1
 
-    with open(OUT_PATH, "w", encoding="utf-8") as out:
+    with open(output_file, "w", encoding="utf-8") as out:
         for r in kept:
             out.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    print(f"✨ Wrote {len(kept)} credential records to {OUT_PATH}\n")
+    print(f"✨ Wrote {len(kept)} credential records to {output_file}\n")
     print("Stats:")
     for k in sorted(stats):
         print(f"  {k}: {stats[k]}")
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 3:
+        main(sys.argv[1], sys.argv[2])
+    else:
+        print("Usage: python3 check_secrets.py <input_file> <output_file>")

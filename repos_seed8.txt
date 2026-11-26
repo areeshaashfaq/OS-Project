@@ -1,0 +1,11 @@
+# sampled from GitHub API seed=8
+https://github.com/Abdulla-Saimun/LPG
+https://github.com/ForkFromYanfengLiu-Geology/SOFTX-D-16-00042
+https://github.com/SunsetIntheFall/img
+https://github.com/armando20/spring-oracle-stored-proc
+https://github.com/bbohlsen/T1-Assignment---CIST2100-OAT
+https://github.com/clamp-7724/repository
+https://github.com/emekathegreat/Complete-Python-3-Bootcamp
+https://github.com/gglaochen/RC4-invitationCode
+https://github.com/ndiya-eme/learning-area
+https://github.com/richardperea882/RichieDP3

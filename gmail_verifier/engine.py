@@ -6,15 +6,17 @@ import pyotp
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # FIXED FINGERPRINT: Consistency is key to bypassing "bot" detection
+# Using a common, clean Windows Chrome 120 profile
 FIXED_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-FIXED_TIMEZONE = "America/New_York"
+FIXED_TIMEZONE = "America/New_York" # Pick a timezone close to your actual location
 FIXED_VIEWPORT = {"width": 1920, "height": 1080}
 
 PROXY_POOL = []
 
 class GmailVerificationEngine:
-    def __init__(self, headless=True, debug_dir="debug_screenshots"):
+    def __init__(self, headless=True, use_captcha_solver=False, debug_dir="debug_screenshots"):
         self.headless = headless
+        self.use_captcha_solver = use_captcha_solver
         self.p = None
         self.browser = None
         self.debug_dir = debug_dir
@@ -32,8 +34,7 @@ class GmailVerificationEngine:
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--disable-infobars",
-            "--disable-dev-shm-usage"
+            "--disable-infobars"
         ]
         self.browser = await self.p.chromium.launch(
             headless=self.headless, 
@@ -47,49 +48,35 @@ class GmailVerificationEngine:
             await self.p.stop()
 
     async def _type_human(self, page, selector, text):
-        """
-        Types text with human-like irregularity.
-        Ensures the element is focused before typing.
-        """
-        try:
-            element = page.locator(selector).first
-            await element.wait_for(state="visible", timeout=5000)
-            await element.click()
-            # Explicitly focus to ensure keyboard input goes to the right place
-            await element.focus()
-            
-            # Clear any pre-filled text
-            await element.fill("")
-            
-            for char in text:
-                # Realistic typing: 80-200ms per char
-                await page.keyboard.type(char, delay=random.randint(80, 200))
-                await asyncio.sleep(random.uniform(0.02, 0.1))
-        except Exception as e:
-            print(f"[_type_human] Error typing to {selector}: {e}")
+        element = await page.wait_for_selector(selector)
+        await element.click()
+        box = await element.bounding_box()
+        if box:
+            x = box['x'] + box['width'] * random.uniform(0.2, 0.8)
+            y = box['y'] + box['height'] * random.uniform(0.2, 0.8)
+            await page.mouse.move(x, y, steps=20)
+        await element.fill("")
+        for char in text:
+            # Realistic typing: 100-300ms per char
+            await page.keyboard.type(char, delay=random.randint(100, 300))
+            await asyncio.sleep(random.uniform(0.05, 0.15))
 
     async def _click_next(self, page):
-        """
-        Robustly clicks the 'Next' or 'Submit' button.
-        """
         selectors = [
-            "button[data-messageid='identifier-submit']",
-            "button[aria-label='Next']",
+            "button#identifier-next",
             "button[type='submit']",
-            "input[type='submit']"
+            "input[type='submit']",
+            "button[aria-label='Next']",
+            "button[data-messageid='identifier-submit']"
         ]
-        
         for selector in selectors:
             try:
-                btn = page.locator(selector).first
-                # Check if visible and enabled
-                if await btn.is_visible(timeout=2000):
+                btn = await page.wait_for_selector(selector, timeout=2000)
+                if btn:
                     await btn.click()
                     return True
             except Exception:
                 continue
-        
-        # Fallback: Press Enter
         try:
             await page.keyboard.press("Enter")
             return True
@@ -100,7 +87,7 @@ class GmailVerificationEngine:
         try:
             safe_email = email.replace("@", "_at_").replace(".", "_").replace("-", "_")
             filename = f"{self.debug_dir}/{safe_email}_{status}_{int(time.time())}.png"
-            await page.screenshot(path=filename, full_page=True)
+            await page.screenshot(path=filename)
             print(f"[DEBUG] Screenshot saved: {filename}")
         except Exception as e:
             print(f"[DEBUG] Failed to save screenshot: {e}")
@@ -120,13 +107,12 @@ class GmailVerificationEngine:
 
         proxy_config = self._get_proxy()
 
+        # USE FIXED FINGERPRINT
         context_options = {
             "user_agent": FIXED_USER_AGENT,
             "viewport": FIXED_VIEWPORT,
             "timezone_id": FIXED_TIMEZONE,
-            "locale": "en-US",
-            "java_script_enabled": True,
-            "bypass_csp": True
+            "locale": "en-US"
         }
         
         if proxy_config:
@@ -134,20 +120,14 @@ class GmailVerificationEngine:
             result["proxy_ip"] = proxy_config["server"]
 
         context = await self.browser.new_context(**context_options)
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
-            });
-        """)
-        
         page = await context.new_page()
         
         try:
-            # 1. WARM-UP
+            # 1. CLEAN SLATE WARM-UP
+            # Visit Google Search to establish a base session and NID cookie
             await page.goto("https://www.google.com/webhp", timeout=30000)
+            
+            # Handle Cookie Consent if it appears (common in EU, but good practice)
             try:
                 consent_btn = await page.wait_for_selector("button[aria-label='Accept all']", timeout=3000)
                 if consent_btn:
@@ -155,12 +135,14 @@ class GmailVerificationEngine:
                     await asyncio.sleep(1)
             except:
                 pass
-            await asyncio.sleep(random.uniform(3, 5))
 
-            # 2. NAVIGATE TO LOGIN
+            # Let the session "settle"
+            await asyncio.sleep(random.uniform(5, 8))
+
+            # 2. Navigate to Login
             await page.goto("https://accounts.google.com/signin/v2/identifier?flowName=GlifWebSignIn&flowEntry=ServiceLogin", timeout=30000)
             
-            # 3. WAIT FOR EMAIL FIELD
+            # 3. Wait for Email Field
             try:
                 await page.wait_for_selector('input[name="identifier"]', timeout=10000)
             except PlaywrightTimeoutError:
@@ -169,10 +151,10 @@ class GmailVerificationEngine:
                 await self._save_debug_screenshot(page, email, "EMAIL_FIELD_NOT_FOUND")
                 return result
 
-            # 4. ENTER EMAIL
+            # 4. Enter Email
             await self._type_human(page, 'input[name="identifier"]', email)
             
-            # 5. CLICK NEXT
+            # 5. Click Next
             success = await self._click_next(page)
             if not success:
                 result["status"] = "NEXT_BUTTON_NOT_FOUND"
@@ -180,74 +162,73 @@ class GmailVerificationEngine:
                 await self._save_debug_screenshot(page, email, "NEXT_BUTTON_NOT_FOUND")
                 return result
                 
-            # 6. WAIT FOR SERVER VALIDATION
+            # 6. CRITICAL PAUSE: Mimic a user reading the password field
             await asyncio.sleep(random.uniform(3, 6))
 
-            # 7. CHECK FOR EMAIL REJECTION vs VALID
-            # Strategy: If password field appears, email is valid.
-            # Increased timeout to 10s to handle slow DOM rendering.
-            try:
-                await page.wait_for_selector('input[name="Passwd"]', timeout=10000)
-                email_validated = True 
-            except PlaywrightTimeoutError:
-                email_validated = False
-
-            if not email_validated:
-                alert_text = ""
-                try:
-                    alert_el = await page.locator("div[role='alert']").first
-                    alert_text = await alert_el.inner_text()
-                except:
-                    pass
-
-                page_content_lower = (await page.content()).lower()
-                
-                if "doesn't exist" in alert_text.lower() or "not found" in alert_text.lower() or "use another account" in page_content_lower:
-                    result["status"] = "EMAIL_REJECTED"
-                    result["error_message"] = f"Google rejected email: {alert_text[:100]}"
-                    await self._save_debug_screenshot(page, email, "EMAIL_REJECTED")
-                    return result
-                
-                result["status"] = "EMAIL_VALIDATION_STUCK"
-                result["error_message"] = "Email entered but did not advance to password field"
-                await self._save_debug_screenshot(page, email, "EMAIL_STUCK")
+            # 7. Check for Immediate Rejection
+            current_url = page.url
+            if "rejected" in current_url:
+                result["status"] = "EMAIL_REJECTED"
+                result["error_message"] = "Google indicates this email does not exist or is flagged"
+                await self._save_debug_screenshot(page, email, "EMAIL_REJECTED")
                 return result
 
-            # --- IF EMAIL IS VALID, PROCEED TO PASSWORD ---
-
-            # 8. ENTER PASSWORD
-            # Wait a bit more to ensure the field is fully interactive
-            await asyncio.sleep(1)
-            await self._type_human(page, 'input[name="Passwd"]', password)
-            
-            # CLICK NEXT
-            success = await self._click_next(page)
-            if not success:
-                await page.keyboard.press("Enter")
+            # 8. Check for Password Field
+            try:
+                await page.wait_for_selector('input[name="Passwd"]', timeout=5000)
                 
-            # 10. POST-PASSWORD PAUSE
-            await asyncio.sleep(random.uniform(4, 7))
-            
-            # 11. HANDLE POST-PASSWORD STATES
+                # 9. Enter Password
+                await self._type_human(page, 'input[name="Passwd"]', password)
+                success = await self._click_next(page)
+                if not success:
+                    await page.keyboard.press("Enter")
+                
+                # 10. POST-PASSWORD PAUSE
+                await asyncio.sleep(random.uniform(4, 7))
+                
+            except PlaywrightTimeoutError:
+                current_url = page.url
+                if "challenge" in current_url:
+                    result["status"] = "CAPTCHA_BLOCKED"
+                    result["error_message"] = "Hit a CAPTCHA before password entry"
+                else:
+                    result["status"] = "PASSWORD_FIELD_MISSING"
+                    result["error_message"] = f"Password field did not appear. URL: {current_url}"
+                    await self._save_debug_screenshot(page, email, "NO_PASS_FIELD")
+                return result
+
+            # 11. Handle Post-Password States
             current_url = page.url
             
             if "mail.google.com" in current_url:
                 result["status"] = "SUCCESS"
                 return result
 
-            if "challenge" in current_url or "2fa" in current_url:
-                totp_input = page.locator("input[name='totp']")
-                if await totp_input.count() > 0:
+            if "challenge" in current_url:
+                is_2fa = False
+                try:
+                    if await page.locator("text=Authentication code").count() > 0 or \
+                       await page.locator("text=Verification code").count() > 0 or \
+                       "2fa" in current_url:
+                        is_2fa = True
+                except:
+                    pass
+
+                if is_2fa:
                     if totp_secret:
                         totp = pyotp.TOTP(totp_secret).now()
-                        await totp_input.fill(totp)
-                        await self._click_next(page)
-                        await asyncio.sleep(5)
-                        if "mail.google.com" in page.url:
-                            result["status"] = "SUCCESS_WITH_2FA"
-                        else:
-                            result["status"] = "2FA_FAILED"
-                            result["error_message"] = page.url
+                        try:
+                            await self._type_human(page, 'input[type="text"]', totp)
+                            await self._click_next(page)
+                            await asyncio.sleep(5)
+                            if "mail.google.com" in page.url:
+                                result["status"] = "SUCCESS_WITH_2FA"
+                            else:
+                                result["status"] = "2FA_FAILED"
+                                result["error_message"] = page.url
+                        except Exception as e:
+                            result["status"] = "2FA_INPUT_ERROR"
+                            result["error_message"] = str(e)
                     else:
                         result["status"] = "2FA_REQUIRED_NO_SECRET"
                         result["error_message"] = "TOTP secret missing"
@@ -257,17 +238,12 @@ class GmailVerificationEngine:
                     await self._save_debug_screenshot(page, email, "CHALLENGE")
                 return result
 
+            # 12. WRONG PASSWORD DETECTION
             if "accounts.google.com" in current_url:
-                alert_text = ""
-                try:
-                    alert_el = await page.locator("div[role='alert']").first
-                    alert_text = await alert_el.inner_text().lower()
-                except:
-                    pass
-
-                if "incorrect" in alert_text or "wrong" in alert_text or "no longer works" in alert_text:
+                page_content = await page.content()
+                if "No longer works" in page_content or "incorrect" in page_content.lower() or "wrong" in page_content.lower():
                     result["status"] = "INVALID_CREDENTIALS"
-                    result["error_message"] = f"Google explicitly reported wrong password: {alert_text[:100]}"
+                    result["error_message"] = "Google explicitly reported wrong password"
                     await self._save_debug_screenshot(page, email, "WRONG_PASS")
                 else:
                     result["status"] = "UNKNOWN_STATE"
@@ -291,7 +267,7 @@ class GmailVerificationEngine:
             
         return result
 
-    async def run_batch(self, credentials, concurrency=3):
+    async def run_batch(self, credentials, concurrency=1):
         results = []
         semaphore = asyncio.Semaphore(concurrency)
         

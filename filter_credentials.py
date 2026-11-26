@@ -10,8 +10,6 @@ import json
 import re
 from collections import Counter
 
-IN_PATH  = "credentials_extracted_3.jsonl"
-OUT_PATH = "worth_investigating_3.jsonl"
 
 # ---------- Bucket 1: known default dev credentials ----------
 DEFAULT_CREDS = {
@@ -149,6 +147,11 @@ def main():
     for k in sorted(stats, key=lambda x: -stats[x]):
         print(f"  {k:32s} {stats[k]}")
 
-
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) == 3:
+        IN_PATH = sys.argv[1]
+        OUT_PATH = sys.argv[2]
+        main() # Assuming your logic is inside a main() function
+    else:
+        print("Usage: python3 filter_credentials.py <input_file> <output_file>")
