@@ -1,28 +1,45 @@
 # 🕵️ Secret Scanner & Credential Triage Pipeline
 
-An automated security research pipeline designed to identify accidentally committed secrets in GitHub repositories, classify potential credential exposures, reduce false positives, and support responsible disclosure.
+An automated security research pipeline designed to identify accidentally committed secrets in GitHub repositories, classify potential credential exposures, reduce irrelevant findings, and support responsible disclosure.
 
-The project uses **TruffleHog** for repository scanning and Git history analysis, combined with a custom Python pipeline for data processing, classification, filtering, and reporting.
+The project uses **TruffleHog** for repository scanning and Git history analysis, combined with a custom Python pipeline for data processing, classification, filtering, reporting, and visualization.
+
+---
+
+## 🎯 Research Objective
+
+The objective of this project is to study accidental credential exposure in GitHub repositories, understand the limitations of automated secret detection, and investigate the relationship between static credential exposure and infrastructure vulnerability.
+
+### Research Question
+
+To what extent do credentials extracted from public GitHub repositories represent actual valid authentications versus false positives, when evaluated across:
+
+1. Extraction accuracy.
+2. Live connection validity.
+3. Infrastructure reachability.
 
 ---
 
 ## 📌 Project Overview
 
-The pipeline consists of five main stages:
+The project consists of eight stages:
 
 | Stage | Description |
 |---|---|
 | 1. Repository Discovery | Generate reproducible samples of GitHub repositories. |
 | 2. Secret Detection | Scan authorized repositories and their Git history using TruffleHog. |
-| 3. Credential Analysis | Identify potential username-password exposures and other credential types. |
-| 4. Noise Filtering | Remove known placeholders, test fixtures, and irrelevant findings. |
+| 3. Credential Analysis | Identify potential username-password exposures and other credential-related findings. |
+| 4. Noise Filtering | Remove known placeholders, test fixtures, duplicates, and irrelevant findings. |
 | 5. Reporting | Consolidate research findings into a structured Excel report. |
-| 6. Live Verification | Actively test credentials against live services to identify valid exposures. |
-| 7. Data Exploration | Explore live databases to catalog data scope and sensitive fields. |
+| 6. Data Preparation | Convert consolidated findings into a standardized CSV format. |
+| 7. Live Verification | Evaluate credential validity and infrastructure reachability in explicitly authorized environments. |
+| 8. Data Exploration | Evaluate database exposure scope and sensitive field categories in authorized environments. |
 
 ### Pipeline Workflow
 
 **Repository Discovery → Secret Scanning → Credential Analysis → Noise Filtering → Excel Reporting → Data Preparation → Live Verification → Data Exploration**
+
+The main automated pipeline coordinates the first five stages. Data preparation, verification, and database exploration are separate research components.
 
 ---
 
@@ -34,6 +51,7 @@ Ensure the following dependencies are installed before running the pipeline.
 
 - Python 3.8 or above
 - pip package manager
+- Git
 
 ### 2. TruffleHog
 
@@ -59,16 +77,23 @@ source venv/bin/activate
 pip install pandas openpyxl pymongo psycopg2-binary PyMySQL redis requests
 ```
 
+Additional dependencies for visualization and detector configuration:
+
+```bash
+pip install matplotlib PyYAML
+```
+
 | Library | Purpose |
 |---|---|
-| pandas | Data processing, analysis, and consolidation |
-| openpyxl | Excel spreadsheet generation |
-| pymongo | MongoDB driver for live verification, authentication, and read-only exploration. |
-| psycopg2-binary | PostgreSQL driver for live verification and connection testing. |
-| PyMySQL | MySQL/MariaDB driver for live verification and connection testing. |
-| redis | Redis/KeyDB driver for live verification and connection testing. |
-| requests | HTTP client for verifying Basic Auth credentials in web services and APIs. |
-
+| pandas | Data processing, analysis, and consolidation. |
+| openpyxl | Excel spreadsheet generation. |
+| pymongo | MongoDB database driver. |
+| psycopg2-binary | PostgreSQL database driver. |
+| PyMySQL | MySQL/MariaDB database driver. |
+| redis | Redis/KeyDB database driver. |
+| requests | HTTP requests and API communication. |
+| matplotlib | Generation of experimental graphs. |
+| PyYAML | Reading custom YAML detector configurations. |
 
 ---
 
@@ -84,21 +109,26 @@ python3 prepare_findings.py --input all_investigating_credentials.xlsx --output 
 python3 db_tester.py --input findings_annotated.csv --output verified_credentials.csv --workers 10
 python3 db_read_only_explore.py
 
-## 🚀 Pipeline Execution
 
-The pipeline is divided into five sequential steps.
+The automated orchestrator accepts a random seed as its command-line argument. The repository sample size and worker count are predefined in the current implementation.
+
+All scanning and active assessment must be restricted to explicitly authorized repositories and services or controlled test environments.
+
+---
+
+## 🚀 Pipeline Execution
 
 ### Step 1: Discover Repositories
 
 **Script:** `sample_github_api.py`
 
-The repository discovery script uses the GitHub API to generate reproducible samples of public repositories for research.
+The repository discovery script uses the GitHub API to generate reproducible repository samples for research.
 
 | Parameter | Description |
 |---|---|
-| `--sample` | Number of repositories to sample |
-| `--seed` | Random seed used for reproducibility |
-| `--out` | Output filename |
+| `--sample` | Number of repositories to sample. |
+| `--seed` | Random seed used for reproducibility. |
+| `--out` | Output filename. |
 
 Different seeds allow researchers to obtain different repository samples while maintaining reproducibility.
 
@@ -121,35 +151,33 @@ The scanning process includes:
 
 | Parameter | Description |
 |---|---|
-| `--repos-file` | Input repository list |
-| `--workers` | Number of concurrent scanning workers |
-| `--progress` | Progress tracking filename |
+| `--repos-file` | Input repository list. |
+| `--workers` | Number of concurrent scanning workers. |
+| `--progress` | Progress tracking filename. |
 
-Scanning may take approximately 1–3 hours, depending on repository size, network speed, available hardware, and the number of repositories.
+Execution time depends on repository size, network speed, available hardware, and the number of repositories.
 
-The progress tracking mechanism is designed to allow interrupted scans to resume rather than restart entirely.
+The progress tracking mechanism allows interrupted scans to resume rather than restart entirely.
 
 ### Step 3: Credential Analysis
 
 **Script:** `check_secrets.py`
 
-This stage processes the scanner output and identifies potential credential-related findings.
+This stage processes scanner output and identifies potential credential-related findings.
 
-It focuses on distinguishing relevant credential patterns from unrelated secrets and organizing the results for subsequent analysis.
+It distinguishes relevant credential patterns from unrelated secret types and organizes records for subsequent analysis.
 
 The research scope includes potential username-password pairs and authentication-related connection strings.
 
-Full-value extraction should only be demonstrated with synthetic credentials in controlled test repositories. Third-party findings should remain redacted.
+Third-party credentials should remain redacted, and full-value demonstrations should be restricted to synthetic credentials.
 
 ### Step 4: Filter Out Noise
 
 **Script:** `filter_credentials.py`
 
-Initial scanner results may contain false positives, example credentials, placeholders, and test data.
+Initial scanner results may contain false positives, example credentials, placeholders, duplicate records, and test data.
 
-This stage reduces noise by identifying common patterns that are unlikely to represent genuine exposures.
-
-Examples of noise include:
+This stage reduces irrelevant findings by identifying common patterns that are unlikely to represent genuine exposures.
 
 | Category | Example |
 |---|---|
@@ -157,9 +185,11 @@ Examples of noise include:
 | Generic placeholders | `user:password` |
 | Environment placeholders | `__DB_USER__` |
 | Repeated default values | `db1:db1` |
-| Test fixtures | Synthetic authentication data |
+| Test fixtures | Synthetic authentication data. |
+| Documentation examples | Example configurations. |
+| Duplicate findings | Repeated research records. |
 
-The filtered output contains findings that require further investigation.
+The filtered output contains higher-signal findings requiring further investigation.
 
 A retained finding does not necessarily represent a valid or active credential.
 
@@ -167,154 +197,350 @@ A retained finding does not necessarily represent a valid or active credential.
 
 **Script:** `make_excel.py`
 
-The final stage consolidates research findings from multiple scanning batches into a structured Excel spreadsheet.
+This stage consolidates research findings from multiple scanning batches into a structured Excel spreadsheet.
 
-The script uses pandas and openpyxl to organize redacted research records into a readable format for manual review and statistical analysis.
+The script uses pandas and openpyxl to organize research records and remove duplicate entries.
 
-**Output filename:**
+**Output filename:** `all_investigating_credentials.xlsx`
 
-`all_investigating_credentials.xlsx`
+Original spreadsheets containing sensitive information must remain private. Only redacted or anonymized versions should be distributed.
 
-Research spreadsheets should not contain plaintext third-party credentials.
+### Step 6: Data Preparation & Normalization
 
-### Step 5: Data Preparation & Normalization
-**Script:** `prepare_findings.py`
+**Script:** `db_verifier/prepare_findings.py`
 
-This stage converts the raw consolidated findings from the initial scanning phase into a standardized CSV format suitable for active verification. The script ensures a consistent schema across different scanning batches and handles data cleaning tasks such as whitespace stripping and default value injection.
+This stage converts consolidated Excel findings into a standardized CSV format.
+
+The script handles data cleaning, normalization, column mapping, and consistency across experimental batches.
 
 **Input:** `all_investigating_credentials.xlsx`
+
 **Output:** `findings_annotated.csv`
 
-The standardized schema includes the following columns:
-- `source_file`: Origin of the finding.
-- `repo`: GitHub repository URL.
-- `user_id`: Extracted username or identifier.
-- `password`: Extracted password or secret.
-- `detector`: TruffleHog detector type (e.g., MongoDB, Postgres).
-- `file`: File path within the repository.
-- `line`: Line number of the finding.
-- `commit`: Commit hash where the secret was introduced.
-- `source_secret`: The full connection string or secret value.
-- `noise`: Boolean flag indicating if the finding is likely a placeholder.
-- `preview`: A redacted preview of the secret for safe display.
+The standardized research records include source information, repository metadata, detector classifications, file references, commit information, and credential-related fields.
 
-### Step 6: Live Credential Verification
-**Script:** `db_tester.py`
+### Step 7: Live Credential Verification
 
-This stage performs active verification of the filtered credential candidates against their intended services. The goal is to distinguish between historical artifacts (dead credentials) and active exposures (live credentials).
+**Script:** `verify_credentials.py`
 
-The verifier supports multiple protocols, including MongoDB, PostgreSQL, MySQL, Redis, and HTTP Basic Auth. It employs a multi-stage validation strategy:
-1. **Syntactic Parsing:** Extracts host, port, user, and password from connection strings.
-2. **Network Reachability:** Performs DNS resolution and TCP socket checks to identify unreachable or firewalled endpoints.
-3. **Authentication Handshake:** Initiates a secure connection using the extracted credentials.
-4. **Status Classification:** Categorizes the outcome into standardized statuses:
-   - `SUCCESS`: Valid credentials with active access.
-   - `INVALID_CREDENTIALS`: Service reachable, but authentication failed.
-   - `UNREACHABLE`: Network timeout or DNS failure.
-   - `INTERNAL_HOST`: Credential points to a private/Docker service name (e.g., `localhost`, `mongo`).
-   - `CLUSTER_DELETED`: Specific to MongoDB Atlas, indicating the cluster no longer exists.
+This separate research component evaluates credential validity and infrastructure reachability within explicitly authorized environments.
 
-**Parameters:**
+The verifier supports different database and authentication protocols and categorizes assessment outcomes into standardized statuses.
 
-| Parameter | Description |
-| :--- | :--- |
-| `--input` | Input CSV file containing filtered credentials (default: `findings_annotated.csv`). |
-| `--output` | Output CSV file for verification results (default: `verified_credentials.csv`). |
-| `--workers` | Number of concurrent network workers (default: 10). |
+| Status | Description |
+|---|---|
+| `SUCCESS` | Successful authentication reported during assessment. |
+| `INVALID_CREDENTIALS` | Authentication was rejected. |
+| `UNREACHABLE` | The target could not be reached during assessment. |
+| `INTERNAL_HOST` | The finding refers to an internal or local service. |
+| `CLUSTER_DELETED` | Classification used for certain unavailable MongoDB clusters. |
 
-**Note:** Verification should be conducted in a controlled environment to avoid unintended side effects on production systems. Read-only operations (`ping`, `version()`) are preferred to minimize impact.
+**Output:** `verified_credentials.csv`
 
-### Step 7: Data Exploration & Extraction
-**Script:** `db_read_only_explore.py`
+An unreachable endpoint does not necessarily establish that the underlying infrastructure has been deleted. Similarly, authentication failure does not necessarily establish that a password has been rotated.
 
-For credentials classified as `SUCCESS`, this stage performs a read-only exploration of the target database. The objective is to catalog the data exposure scope, identifying sensitive collections, user records, and potential PII (Personally Identifiable Information).
+### Step 8: Data Exploration & Impact Assessment
 
-The exploration module includes:
-- **Database Enumeration:** Lists all accessible databases and collections.
-- **Document Sampling:** Retrieves a limited sample (e.g., first 3 documents) from each collection to assess data structure.
-- **Flattening:** Converts nested JSON documents into flat, tabular structures for easier analysis.
-- **Sensitive Field Detection:** Automatically flags fields containing keywords such as `password`, `email`, `token`, `api_key`, and `secret`.
-- **Deduplication & Resumability:** Implements logic to skip connections already explored in previous runs, allowing for incremental pipeline execution.
+**Script:** `db_verifier/db_read_only_explore.py`
 
-**Output:**
-The results are consolidated into a multi-sheet Excel workbook (`db_exploration_results.xlsx`):
-1. **Summary:** High-level overview of explored connections, including status and accessible databases.
-2. **Samples:** Flattened sample documents from each collection.
-3. **Sensitive_Findings:** A dedicated sheet listing all fields that matched sensitive data patterns, including a preview of the value and its length.
+This separate research component was developed to evaluate the potential scope and sensitivity of accessible database information in authorized environments.
 
-This stage provides the raw evidence required for impact assessment and disclosure drafting.
+The research assessment considers database structures, collection categories, and sensitive field types.
+
+**Output:** `db_exploration_results.xlsx`
+
+The generated workbook contains the following sheets:
+
+| Sheet | Description |
+|---|---|
+| Summary | High-level database assessment observations. |
+| Samples | Structured research observations collected during assessment. |
+| Sensitive_Findings | Classification of potentially sensitive field types. |
+
+Only anonymized aggregate observations should be included in academic reports and distributed project files.
 
 ---
 
-## 📂 Project Files
+## 📂 Project Files and Folder Structure
 
-### Core Scripts
+### Core Pipeline Scripts
 
 | File | Description |
 |---|---|
-| `sample_github_api.py` | Generates reproducible repository samples using the GitHub API. |
-| `scan.py` | Performs repository scanning using TruffleHog. |
-| `check_secrets.py` | Processes scanner results and identifies credential-related findings. |
-| `filter_credentials.py` | Filters placeholders, default credentials, test fixtures, and other noise. |
-| `make_excel.py` | Consolidates research findings into an Excel spreadsheet. |
-| `prepare_findings.py` | Converts consolidated Excel findings into a standardized CSV format for verification. |
-| `db_tester.py` | Performs active live-verification of credentials against target services. |
-| `db_read_only_explore.py` | Explores live databases to extract sensitive data and generate structured reports. |
+| `run_pipeline.py` | Main entry point of the automated pipeline. Coordinates repository discovery, secret detection, credential analysis, noise filtering, and Excel consolidation. |
+| `sample_github_api.py` | Uses the GitHub REST API to generate reproducible repository samples based on random seeds. |
+| `scan.py` | Integrates TruffleHog with the Python pipeline for static secret detection and Git history analysis. Maintains scan progress and supports resumability. |
+| `check_secrets.py` | Processes raw scanner findings and identifies credential-related records relevant to the research scope. |
+| `filter_credentials.py` | Applies heuristic classification to filter default credentials, placeholders, documentation examples, test fixtures, irrelevant findings, and duplicates. |
+| `make_excel.py` | Consolidates shortlisted findings from multiple experimental batches into an Excel workbook using pandas and openpyxl. |
+| `verify_credentials.py` | Separate research component for evaluating credential validity and infrastructure reachability within authorized environments. |
 
-### Input and Output Files
+### Database Assessment Files
 
-| File | Purpose |
+| File | Description |
 |---|---|
-| `repos_seed5.txt` | Repository sample generated using seed 5. |
-| `scan_progress_seed5.jsonl` | Scan progress and intermediate findings. |
-| `credentials_seed5.jsonl` | Intermediate credential-analysis records. |
-| `worth_investigating_seed5.jsonl` | Filtered findings requiring further review. |
-| `all_investigating_credentials.xlsx` | Consolidated research spreadsheet. |
-| `findings_annotated.csv` | Standardized CSV output from `prepare_findings.py`. |
-| `verified_credentials.csv` | Active verification results (status, latency, errors). |
-| `db_exploration_results.xlsx` | Final exploration report containing sampled data and sensitive field inventory. |
+| `db_verifier/prepare_findings.py` | Converts consolidated Excel findings into a standardized CSV format and performs data normalization. |
+| `db_verifier/db_read_only_explore.py` | Research component for evaluating database exposure scope and sensitive field categories within authorized environments. |
+| `db_verifier/db_exploration_results.xlsx` | Generated workbook containing database assessment observations and sensitive-field classifications. |
 
-Generated files containing sensitive information should be excluded from version control.
+### Configuration and Testing Files
+
+| File | Description |
+|---|---|
+| `detectors.yaml` | Contains custom regular-expression-based detector configurations for credential-related patterns. |
+| `detector_check.py` | Tests custom detector configurations using sample inputs. |
+| `.gitignore` | Defines files and directories that should be excluded from Git version control. |
+| `README.md` | Contains project documentation, installation instructions, execution information, file descriptions, and experimental results. |
+
+### Visualization Scripts
+
+| File | Description |
+|---|---|
+| `make_graph.py` | Generates a comparative bar chart showing repositories scanned and repositories containing findings across experimental batches. |
+| `make_funnel_graph.py` | Generates a horizontal bar chart illustrating the reduction in records across raw detection, credential analysis, and heuristic filtering. |
 
 ---
 
-## ⚙️ How It Works Under the Hood
+## 📁 Repository Sampling Files
 
-### `sample_github_api.py`
+These files contain repository samples generated during different experimental batches.
 
-Uses the GitHub API to collect repository samples. Random seeds support reproducible experiments and comparisons between different scanning batches.
+| File | Description |
+|---|---|
+| `repos_seed5.txt` | Repository sample associated with random seed 5. |
+| `repos_seed6.txt` | Repository sample associated with random seed 6. |
+| `repos_seed8.txt` | Repository sample associated with random seed 8. |
+| `repos_seed9.txt` | Repository sample associated with random seed 9. |
+| `repos_seed8_new.txt` | Seed 8 repository list after excluding previously processed repositories. |
+| `repos_seed9_new.txt` | Seed 9 repository list after excluding previously processed repositories. |
+| `already_scanned.txt` | Maintains a record of previously scanned repositories to reduce redundant processing across experimental batches. |
 
-### `scan.py`
+---
 
-Uses Python's subprocess module to execute TruffleHog, process its JSON output, and maintain scan progress.
+## 📄 Raw Scanner Output Files
 
-The scanner examines Git history, allowing the research to identify potential exposures that may no longer be present in the latest version of a repository.
+These files contain raw findings collected during different experimental runs.
 
-### `check_secrets.py`
+| File | Description |
+|---|---|
+| `findings.json` | Structured raw findings collected during an experimental scan. |
+| `findings_seed5.json` | Raw findings associated with the seed 5 experimental batch. |
+| `findings_v2.json` | Raw findings collected during an earlier version of the scanning pipeline. |
 
-Processes TruffleHog findings and examines credential-related patterns, including authentication information within connection strings.
+---
 
-### `filter_credentials.py`
+## 📄 Scan Progress Files
 
-Classifies findings and reduces false positives by identifying known defaults, placeholders, and test fixtures.
+Progress files maintain intermediate findings and allow interrupted experiments to resume.
 
-The objective is to retain higher-signal findings for responsible manual review.
+| File | Description |
+|---|---|
+| `scan_progress.jsonl` | Scan progress and intermediate findings from an experimental run. |
+| `scan_progress_seed5.jsonl` | Scan progress and findings associated with seed 5. |
+| `scan_progress_seed6.jsonl` | Scan progress and findings associated with seed 6. |
+| `scan_progress_seed8.jsonl` | Scan progress and findings associated with seed 8. |
+| `scan_progress_seed9.jsonl` | Scan progress and findings associated with seed 9. |
+| `progress_v2.jsonl` | Progress records from an earlier experimental iteration. |
+| `progress_v2_clean.jsonl` | Processed version of earlier scan progress records. |
 
-### `make_excel.py`
+JSONL files store individual JSON records on separate lines, allowing incremental processing and progress tracking.
 
-Uses pandas and openpyxl to consolidate research records from multiple `worth_investigating` files into a structured Excel spreadsheet.
+---
 
-### `prepare_findings.py`**
+## 📄 Intermediate Credential Analysis Files
 
-Normalizes the consolidated Excel data into a CSV format. It handles column mapping, whitespace stripping, and ensures the schema matches the requirements of the verification engine.
+These files contain intermediate research records produced during the credential analysis stage.
 
-### `db_tester.py`
+| File | Description |
+|---|---|
+| `credentials_extracted.jsonl` | Intermediate credential-analysis records from an experimental run. |
+| `credentials_extracted_2.jsonl` | Credential-analysis records from an additional experimental run. |
+| `credentials_extracted_3.jsonl` | Credential-analysis records from a subsequent experimental run. |
+| `credentials_seed8.jsonl` | Credential-analysis records associated with seed 8. |
+| `credentials_seed9.jsonl` | Credential-analysis records associated with seed 9. |
 
-Implements a concurrent verification engine using `concurrent.futures`. It parses connection strings to extract host, port, and credentials, then performs DNS lookups and TCP socket checks to filter unreachable hosts. For reachable hosts, it initiates protocol-specific authentication handshakes (MongoDB, PostgreSQL, etc.) to classify credentials as `SUCCESS`, `INVALID_CREDENTIALS`, or `UNREACHABLE`.
+These files represent intermediate records before heuristic filtering and duplicate removal.
 
-### `db_read_only_explore.py`
+---
 
-For verified `SUCCESS` credentials, this script performs a read-only exploration of the target database. It enumerates collections, samples documents, and flattens nested JSON structures into tabular formats. It includes a sensitive field detector that flags values matching patterns for passwords, emails, and API keys, appending the results to a multi-sheet Excel workbook.
+## 📄 Filtered Credential Files
+
+These files contain higher-signal findings retained after heuristic filtering.
+
+| File | Description |
+|---|---|
+| `worth_investigating.jsonl` | Shortlisted findings retained after filtering. |
+| `worth_investigating_3.jsonl` | Shortlisted findings from an additional experimental run. |
+| `worth_investigating_seed8.jsonl` | Filtered findings associated with seed 8. |
+| `worth_investigating_seed9.jsonl` | Filtered findings associated with seed 9. |
+
+A retained record represents a finding requiring further review and does not necessarily represent a valid or active credential.
+
+---
+
+## 📑 Final Research Output Files
+
+| File | Description |
+|---|---|
+| `all_investigating_credentials.xlsx` | Consolidated Excel workbook containing shortlisted research findings across multiple experimental batches. |
+| `findings_annotated.csv` | Standardized CSV containing normalized research records and associated metadata. |
+| `verified_credentials.csv` | Contains reported credential validity and infrastructure reachability assessment outcomes. |
+| `verified_results.csv` | Contains additional experimental verification outcome records. |
+| `db_exploration_results.xlsx` | Generated database assessment workbook containing research observations and sensitive-field classifications. |
+
+These files are generated research artifacts and are not required for a fresh installation.
+
+Original records containing credentials, authentication secrets, or personal information must be stored privately. Only anonymized or redacted versions should be included in the distributed repository.
+
+---
+
+## 📂 Folder Descriptions
+
+| Folder | Description |
+|---|---|
+| `db_verifier/` | Contains database assessment and research data preparation components, along with associated experimental outputs. |
+| `figures/` | Contains graphical representations of experimental results used in the research paper and presentation. |
+| `reports/` | Automatically generated directory containing research reports and disclosure drafts. Not required in the distributed repository. |
+| `venv/` | Local Python virtual environment containing installed dependencies. Automatically generated during environment setup. |
+| `__pycache__/` | Automatically generated directory containing compiled Python bytecode. |
+| `.git/` | Contains Git repository metadata and version history. |
+
+### Main Directory Structure
+
+```text
+OS-Project/
+│
+├── README.md
+├── .gitignore
+│
+├── run_pipeline.py
+├── sample_github_api.py
+├── scan.py
+├── check_secrets.py
+├── filter_credentials.py
+├── make_excel.py
+│
+├── detectors.yaml
+├── detector_check.py
+│
+├── verify_credentials.py
+│
+├── make_graph.py
+├── make_funnel_graph.py
+│
+├── db_verifier/
+│   ├── prepare_findings.py
+│   ├── db_read_only_explore.py
+│   └── db_exploration_results.xlsx
+│
+└── figures/
+    ├── graph_funnel.png
+    └── scan_yield_graph.png
+```
+
+Repository sampling files, raw scanner outputs, progress files, intermediate credential records, and final research outputs are stored separately in the project directory and documented in the preceding sections.
+
+---
+
+## 📊 Generating Experimental Graphs
+
+The project includes two visualization scripts for analyzing the experimental results.
+
+### Repository Detection Yield Graph
+
+```bash
+python3 make_graph.py
+```
+
+**Output:** `scan_yield_graph.png`
+
+This graph compares the number of repositories scanned against the number of repositories containing findings across different experimental batches.
+
+### Pipeline Noise Reduction Graph
+
+```bash
+python3 make_funnel_graph.py
+```
+
+**Output:** `graph_funnel.png`
+
+This graph illustrates the reduction in records across raw secret detection, credential analysis, and heuristic filtering.
+
+The generated graphs can be placed inside the `figures/` directory.
+
+---
+
+## 📊 Experimental Setup and Results
+
+The experiments were conducted using a Windows Subsystem for Linux (WSL) environment.
+
+Four experimental batches were evaluated using the following random seeds:
+
+- Seed 5
+- Seed 6
+- Seed 8
+- Seed 9
+
+The findings from these experimental batches were consolidated for statistical analysis, comparison, and visualization.
+
+### Pipeline Noise Reduction
+
+| Pipeline Stage | Number of Records |
+|---|---:|
+| Raw TruffleHog Findings | 900 |
+| Extracted Credential Records | 148 |
+| High-Signal Findings | 16 |
+
+The pipeline achieved an overall record reduction of approximately **98.22%**.
+
+This percentage represents the reduction in retained records after credential analysis and heuristic filtering, rather than a measured false-positive rate.
+
+![Pipeline Noise Reduction Funnel](figures/graph_funnel.png)
+
+**Figure 1:** Pipeline noise reduction across raw findings, extracted credential records, and high-signal findings.
+
+### Secret Detection Yield Across Experimental Batches
+
+The following graph compares repositories processed against repositories containing findings across different experimental batches.
+
+![Secret Detection Yield Across Scanned Batches](figures/scan_yield_graph.png)
+
+**Figure 2:** Secret detection yield across experimental batches.
+
+### Reported Network Validity Assessment
+
+The research paper reports the following outcomes for the 16 shortlisted credential records.
+
+| Assessment Outcome | Count | Percentage |
+|---|---:|---:|
+| Unreachable | 8 | 50% |
+| Internal Host | 4 | 25% |
+| Invalid Credentials | 2 | 12.5% |
+| Successful Authentication | 2 | 12.5% |
+| **Total** | **16** | **100%** |
+
+These findings highlight the difference between static credential exposure and authentication validity.
+
+---
+
+## 🔍 Key Research Findings
+
+- Static secret detection produces a substantial number of findings requiring further classification.
+- Heuristic filtering significantly reduces the number of records requiring manual review.
+- A credential-related string detected in source code does not necessarily represent an active credential.
+- Infrastructure reachability and authentication validity are distinct aspects of security assessment.
+- Historical configurations, placeholders, test fixtures, and internal services may remain detectable within Git history.
+- Combining static detection with contextual analysis provides a more informative approach to credential exposure assessment.
+
+---
+
+## ⚠️ Research Limitations
+
+- The experimental repository samples do not necessarily represent the entire GitHub population.
+- Heuristic filtering may exclude genuine credential exposures.
+- Network failures do not necessarily establish that infrastructure has been permanently deleted.
+- Authentication failures do not establish the reason a credential is invalid.
+- Record reduction should not be interpreted as a measured false-positive rate without independent ground-truth labels.
 
 ---
 
@@ -322,14 +548,23 @@ For verified `SUCCESS` credentials, this script performs a read-only exploration
 
 All findings must be handled ethically, securely, and legally.
 
+- Active assessment must be restricted to explicitly authorized systems and controlled research environments.
+- Public repository visibility does not constitute authorization to access associated services.
+- Actual credentials, authentication secrets, and personal information must not be published.
+- Sensitive generated files must be excluded from version control.
+- Research findings should be anonymized before academic distribution.
+- Potential credential exposures should be responsibly disclosed to their respective owners.
+
 ---
 
+## 📚 References
 
-## 🎯 Research Objective
+1. Truffle Security. [TruffleHog: Find, Verify, and Analyze Leaked Credentials](https://github.com/trufflesecurity/trufflehog).
 
-The objective of this project is to study accidental credential exposure in GitHub repositories, understand the limitations of automated secret detection, reduce false positive.
+2. OWASP Foundation. [Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html).
 
-The pipeline provides a structured approach to repository sampling, secret detection, credential classification, noise reduction, and research reporting.
+3. Feng et al. (2022). Automated Detection of Password Leakage from Public GitHub Repositories. Proceedings of the International Conference on Software Engineering (ICSE).
+
 
 ---
 
