@@ -216,7 +216,7 @@ def test_postgres_connection(conn_string, timeout=5, proxy_addr=None):
         reset_socks_proxy()
     return result
 
-def test_all_findings(input_file="findings_annotated.csv", output_file="db_test_results.csv"):
+def test_all_findings(input_file="findings_annotated.csv", output_file="verified_results.csv"):
     df = pd.read_csv(input_file)
     
     # Filter for database-related findings
@@ -301,7 +301,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Test database credentials from findings.")
     parser.add_argument("--input", default="findings_annotated.csv", help="Input CSV file")
-    parser.add_argument("--output", default="db_test_results.csv", help="Output CSV file")
+    parser.add_argument("--output", default="verified_results.csv", help="Output CSV file")
     args = parser.parse_args()
     
     test_all_findings(args.input, args.output)
