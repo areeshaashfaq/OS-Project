@@ -109,11 +109,6 @@ python3 prepare_findings.py --input all_investigating_credentials.xlsx --output 
 python3 db_tester.py --input findings_annotated.csv --output verified_credentials.csv --workers 10
 python3 db_read_only_explore.py
 
-
-The automated orchestrator accepts a random seed as its command-line argument. The repository sample size and worker count are predefined in the current implementation.
-
-All scanning and active assessment must be restricted to explicitly authorized repositories and services or controlled test environments.
-
 ---
 
 ## 🚀 Pipeline Execution
@@ -537,9 +532,6 @@ These findings highlight the difference between static credential exposure and a
 ## ⚠️ Research Limitations
 
 - The experimental repository samples do not necessarily represent the entire GitHub population.
-- Heuristic filtering may exclude genuine credential exposures.
-- Network failures do not necessarily establish that infrastructure has been permanently deleted.
-- Authentication failures do not establish the reason a credential is invalid.
 - Record reduction should not be interpreted as a measured false-positive rate without independent ground-truth labels.
 
 ---
@@ -547,13 +539,6 @@ These findings highlight the difference between static credential exposure and a
 ## 🛑 Responsible Disclosure Rules
 
 All findings must be handled ethically, securely, and legally.
-
-- Active assessment must be restricted to explicitly authorized systems and controlled research environments.
-- Public repository visibility does not constitute authorization to access associated services.
-- Actual credentials, authentication secrets, and personal information must not be published.
-- Sensitive generated files must be excluded from version control.
-- Research findings should be anonymized before academic distribution.
-- Potential credential exposures should be responsibly disclosed to their respective owners.
 
 ---
 
