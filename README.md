@@ -166,6 +166,73 @@ The script uses pandas and openpyxl to organize redacted research records into a
 
 Research spreadsheets should not contain plaintext third-party credentials.
 
+### Step 5: Data Preparation & Normalization
+**Script:** `prepare_findings.py`
+
+This stage converts the raw consolidated findings from the initial scanning phase into a standardized CSV format suitable for active verification. The script ensures a consistent schema across different scanning batches and handles data cleaning tasks such as whitespace stripping and default value injection.
+
+**Input:** `all_investigating_credentials.xlsx`
+**Output:** `findings_annotated.csv`
+
+The standardized schema includes the following columns:
+- `source_file`: Origin of the finding.
+- `repo`: GitHub repository URL.
+- `user_id`: Extracted username or identifier.
+- `password`: Extracted password or secret.
+- `detector`: TruffleHog detector type (e.g., MongoDB, Postgres).
+- `file`: File path within the repository.
+- `line`: Line number of the finding.
+- `commit`: Commit hash where the secret was introduced.
+- `source_secret`: The full connection string or secret value.
+- `noise`: Boolean flag indicating if the finding is likely a placeholder.
+- `preview`: A redacted preview of the secret for safe display.
+
+### Step 6: Live Credential Verification
+**Script:** `db_tester.py`
+
+This stage performs active verification of the filtered credential candidates against their intended services. The goal is to distinguish between historical artifacts (dead credentials) and active exposures (live credentials).
+
+The verifier supports multiple protocols, including MongoDB, PostgreSQL, MySQL, Redis, and HTTP Basic Auth. It employs a multi-stage validation strategy:
+1. **Syntactic Parsing:** Extracts host, port, user, and password from connection strings.
+2. **Network Reachability:** Performs DNS resolution and TCP socket checks to identify unreachable or firewalled endpoints.
+3. **Authentication Handshake:** Initiates a secure connection using the extracted credentials.
+4. **Status Classification:** Categorizes the outcome into standardized statuses:
+   - `SUCCESS`: Valid credentials with active access.
+   - `INVALID_CREDENTIALS`: Service reachable, but authentication failed.
+   - `UNREACHABLE`: Network timeout or DNS failure.
+   - `INTERNAL_HOST`: Credential points to a private/Docker service name (e.g., `localhost`, `mongo`).
+   - `CLUSTER_DELETED`: Specific to MongoDB Atlas, indicating the cluster no longer exists.
+
+**Parameters:**
+
+| Parameter | Description |
+| :--- | :--- |
+| `--input` | Input CSV file containing filtered credentials (default: `findings_annotated.csv`). |
+| `--output` | Output CSV file for verification results (default: `verified_credentials.csv`). |
+| `--workers` | Number of concurrent network workers (default: 10). |
+
+**Note:** Verification should be conducted in a controlled environment to avoid unintended side effects on production systems. Read-only operations (`ping`, `version()`) are preferred to minimize impact.
+
+### Step 7: Data Exploration & Extraction
+**Script:** `db_read_only_explore.py`
+
+For credentials classified as `SUCCESS`, this stage performs a read-only exploration of the target database. The objective is to catalog the data exposure scope, identifying sensitive collections, user records, and potential PII (Personally Identifiable Information).
+
+The exploration module includes:
+- **Database Enumeration:** Lists all accessible databases and collections.
+- **Document Sampling:** Retrieves a limited sample (e.g., first 3 documents) from each collection to assess data structure.
+- **Flattening:** Converts nested JSON documents into flat, tabular structures for easier analysis.
+- **Sensitive Field Detection:** Automatically flags fields containing keywords such as `password`, `email`, `token`, `api_key`, and `secret`.
+- **Deduplication & Resumability:** Implements logic to skip connections already explored in previous runs, allowing for incremental pipeline execution.
+
+**Output:**
+The results are consolidated into a multi-sheet Excel workbook (`db_exploration_results.xlsx`):
+1. **Summary:** High-level overview of explored connections, including status and accessible databases.
+2. **Samples:** Flattened sample documents from each collection.
+3. **Sensitive_Findings:** A dedicated sheet listing all fields that matched sensitive data patterns, including a preview of the value and its length.
+
+This stage provides the raw evidence required for impact assessment and disclosure drafting.
+
 ---
 
 ## 📂 Project Files
