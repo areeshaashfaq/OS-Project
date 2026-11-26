@@ -65,8 +65,6 @@ pip install pandas openpyxl
 ---
 
 ## 🚀 Full Pipeline Execution Flow
-### 🚀 Full Pipeline Execution Flow
-
 **1. Set GitHub token (to avoid API rate limits)**
 export GITHUB_TOKEN=ghp_your_token_here
 
