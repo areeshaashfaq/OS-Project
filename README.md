@@ -1,95 +1,277 @@
 # 🕵️ Secret Scanner & Credential Triage Pipeline
 
-An automated pipeline for scanning public GitHub repositories to discover accidentally committed secrets, extract credential pairs (`username:password`), and filter out false positives for responsible disclosure.
+An automated security research pipeline designed to identify accidentally committed secrets in GitHub repositories, classify potential credential exposures, reduce false positives, and support responsible disclosure.
 
-This project uses **TruffleHog** for the heavy lifting (cloning and scanning git history) and a custom Python pipeline to extract, classify, and triage the results.
+The project uses **TruffleHog** for repository scanning and Git history analysis, combined with a custom Python pipeline for data processing, classification, filtering, and reporting.
 
 ---
 
-🛠️ Prerequisites
-Python 3.8+
+## 📌 Project Overview
 
-TruffleHog installed and available on your system PATH.
+The pipeline consists of five main stages:
 
-macOS: brew install trufflehog
+| Stage | Description |
+|---|---|
+| 1. Repository Discovery | Generate reproducible samples of GitHub repositories. |
+| 2. Secret Detection | Scan authorized repositories and their Git history using TruffleHog. |
+| 3. Credential Analysis | Identify potential username-password exposures and other credential types. |
+| 4. Noise Filtering | Remove known placeholders, test fixtures, and irrelevant findings. |
+| 5. Reporting | Consolidate research findings into a structured Excel report. |
 
-Linux: Download the binary from the TruffleHog Releases page and add it to your PATH.
+### Pipeline Workflow
 
-Python Libraries: Install the required packages (it is recommended to use a virtual environment).
+**Repository Discovery → Secret Scanning → Credential Analysis → Noise Filtering → Excel Reporting**
 
-bash
+---
+
+## 🛠️ Prerequisites
+
+Ensure the following dependencies are installed before running the pipeline.
+
+### 1. Python
+
+- Python 3.8 or above
+- pip package manager
+
+### 2. TruffleHog
+
+TruffleHog must be installed and available on your system PATH.
+
+**macOS**
+
+```bash
+brew install trufflehog
+```
+
+**Linux / WSL**
+
+Download the appropriate binary from the [official TruffleHog Releases page](https://github.com/trufflesecurity/trufflehog/releases) and add it to your system PATH.
+
+### 3. Python Libraries
+
+Using a virtual environment is recommended to avoid dependency conflicts.
+
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install pandas openpyxl
-🚀 How to Run the Pipeline
-To scan a new batch of repositories, follow these 5 steps in order.
+```
 
-Step 1: Discover Repositories
-Generate a random sample of public GitHub repositories. You can change the --seed to get a different batch, and --sample to choose how many repos to grab.
+| Library | Purpose |
+|---|---|
+| pandas | Data processing, analysis, and consolidation |
+| openpyxl | Excel spreadsheet generation |
 
-bash
-python3 sample_github_api.py --sample 200 --seed 5 --out repos_seed5.txt
-Step 2: Scan with TruffleHog
-Run the scanner. This clones the repos, checks their full git history, and saves the raw findings.
+---
 
-bash
-python3 scan.py --repos-file repos_seed5.txt --workers 4 --progress scan_progress_seed5.jsonl
-(Note: This step can take 1–3 hours. If it times out or crashes, simply run the exact same command again to resume where it left off).
+## 🚀 Pipeline Execution
 
-Step 3: Extract Credentials
-Parse the raw TruffleHog output to pull out user_id and password pairs.
+The pipeline is divided into five sequential steps.
 
-Open check_secrets.py and update the filenames at the bottom of the script:
+### Step 1: Discover Repositories
 
-python
-# Inside check_secrets.py
-clean_secrets("scan_progress_seed5.jsonl", "credentials_seed5.jsonl")
-Run the extraction:
+**Script:** `sample_github_api.py`
 
-bash
-python3 check_secrets.py
-Step 4: Filter Out Noise
-The extracted file will contain many false positives (e.g., postgres:postgres, user:password, placeholders).
+The repository discovery script uses the GitHub API to generate reproducible samples of public repositories for research.
 
-Open filter_credentials.py and update the filenames at the top:
+| Parameter | Description |
+|---|---|
+| `--sample` | Number of repositories to sample |
+| `--seed` | Random seed used for reproducibility |
+| `--out` | Output filename |
 
-python
-# Inside filter_credentials.py
-IN_PATH  = "credentials_seed5.jsonl"
-OUT_PATH = "worth_investigating_seed5.jsonl"
-Run the filter:
+Different seeds allow researchers to obtain different repository samples while maintaining reproducibility.
 
-bash
-python3 filter_credentials.py
-Step 5: Review & Generate Excel
-You now have a clean list of high-signal credentials in worth_investigating_seed5.jsonl.
-To combine all your scans into a single, readable Excel spreadsheet:
+Repository samples should be reviewed for authorization before scanning.
 
-bash
-python3 make_excel.py
-(This will generate all_investigating_credentials.xlsx).
+### Step 2: Scan with TruffleHog
 
-🛑 Responsible Disclosure Rules
-When your pipeline flags a credential, you must treat it ethically and legally.
+**Script:** `scan.py`
 
-Do NOT log in. Attempting to use found credentials against third-party services is unauthorized access (and illegal in most jurisdictions).
+The scanner uses TruffleHog to examine authorized repositories and their Git history for potential secret exposures.
 
-Report it. Go to the GitHub repository, click the Security tab, and select Report a vulnerability (or open a standard issue if security advisories are disabled).
+The scanning process includes:
 
-Provide the facts. Tell the owner the file path, line number, commit hash, and the type of credential exposed (e.g., "MongoDB URI"). Ask them to rotate the password and purge the file from git history.
+- Repository cloning.
+- Git history analysis.
+- Secret detection.
+- Progress tracking.
+- Findings collection.
+- Resume support.
 
-🔍 What This Pipeline Deliberately Does NOT Do
-No Verification: It does not test credentials against live services (no login attempts). Validity is for the repo owner to confirm.
+| Parameter | Description |
+|---|---|
+| `--repos-file` | Input repository list |
+| `--workers` | Number of concurrent scanning workers |
+| `--progress` | Progress tracking filename |
 
-No Auto-Reporting: It does not automatically email or message maintainers. It only surfaces the data so you can review it manually.
+Scanning may take approximately 1–3 hours, depending on repository size, network speed, available hardware, and the number of repositories.
 
-⚙️ How It Works Under the Hood
-sample_github_api.py: Uses the GitHub API to grab a random sample of public repos.
+The progress tracking mechanism is designed to allow interrupted scans to resume rather than restart entirely.
 
-scan.py: Calls trufflehog git <url> --json via subprocess, parses the JSON output, and saves it to a progress file.
+### Step 3: Credential Analysis
 
-check_secrets.py: Reads the TruffleHog output and uses regex to extract the user:password parts from connection strings.
+**Script:** `check_secrets.py`
 
-filter_credentials.py: Classifies the extracted credentials. It throws out known defaults (e.g., db1:db1), placeholders (e.g., __DB_USER__), and test fixtures, keeping only high-signal hits.
+This stage processes the scanner output and identifies potential credential-related findings.
 
-make_excel.py: Uses pandas to merge all worth_investigating files into a neat .xlsx file.
+It focuses on distinguishing relevant credential patterns from unrelated secrets and organizing the results for subsequent analysis.
+
+The research scope includes potential username-password pairs and authentication-related connection strings.
+
+Full-value extraction should only be demonstrated with synthetic credentials in controlled test repositories. Third-party findings should remain redacted.
+
+### Step 4: Filter Out Noise
+
+**Script:** `filter_credentials.py`
+
+Initial scanner results may contain false positives, example credentials, placeholders, and test data.
+
+This stage reduces noise by identifying common patterns that are unlikely to represent genuine exposures.
+
+Examples of noise include:
+
+| Category | Example |
+|---|---|
+| Default credentials | `postgres:postgres` |
+| Generic placeholders | `user:password` |
+| Environment placeholders | `__DB_USER__` |
+| Repeated default values | `db1:db1` |
+| Test fixtures | Synthetic authentication data |
+
+The filtered output contains findings that require further investigation.
+
+A retained finding does not necessarily represent a valid or active credential.
+
+### Step 5: Review and Generate Excel
+
+**Script:** `make_excel.py`
+
+The final stage consolidates research findings from multiple scanning batches into a structured Excel spreadsheet.
+
+The script uses pandas and openpyxl to organize redacted research records into a readable format for manual review and statistical analysis.
+
+**Output filename:**
+
+`all_investigating_credentials.xlsx`
+
+Research spreadsheets should not contain plaintext third-party credentials.
+
+---
+
+## 📂 Project Files
+
+### Core Scripts
+
+| File | Description |
+|---|---|
+| `sample_github_api.py` | Generates reproducible repository samples using the GitHub API. |
+| `scan.py` | Performs repository scanning using TruffleHog. |
+| `check_secrets.py` | Processes scanner results and identifies credential-related findings. |
+| `filter_credentials.py` | Filters placeholders, default credentials, test fixtures, and other noise. |
+| `make_excel.py` | Consolidates research findings into an Excel spreadsheet. |
+
+### Input and Output Files
+
+| File | Purpose |
+|---|---|
+| `repos_seed5.txt` | Repository sample generated using seed 5. |
+| `scan_progress_seed5.jsonl` | Scan progress and intermediate findings. |
+| `credentials_seed5.jsonl` | Intermediate credential-analysis records. |
+| `worth_investigating_seed5.jsonl` | Filtered findings requiring further review. |
+| `all_investigating_credentials.xlsx` | Consolidated research spreadsheet. |
+
+Generated files containing sensitive information should be excluded from version control.
+
+---
+
+## ⚙️ How It Works Under the Hood
+
+### `sample_github_api.py`
+
+Uses the GitHub API to collect repository samples. Random seeds support reproducible experiments and comparisons between different scanning batches.
+
+### `scan.py`
+
+Uses Python's subprocess module to execute TruffleHog, process its JSON output, and maintain scan progress.
+
+The scanner examines Git history, allowing the research to identify potential exposures that may no longer be present in the latest version of a repository.
+
+### `check_secrets.py`
+
+Processes TruffleHog findings and examines credential-related patterns, including authentication information within connection strings.
+
+### `filter_credentials.py`
+
+Classifies findings and reduces false positives by identifying known defaults, placeholders, and test fixtures.
+
+The objective is to retain higher-signal findings for responsible manual review.
+
+### `make_excel.py`
+
+Uses pandas and openpyxl to consolidate research records from multiple `worth_investigating` files into a structured Excel spreadsheet.
+
+---
+
+## 🛑 Responsible Disclosure Rules
+
+All findings must be handled ethically, securely, and legally.
+
+### 1. Do Not Log In
+
+Never attempt to authenticate against third-party services using discovered credentials.
+
+Potential credential validity must be confirmed by the repository owner or an explicitly authorized security team.
+
+### 2. Report the Exposure
+
+Navigate to the repository's **Security** tab and use its private vulnerability reporting mechanism where available.
+
+If private vulnerability reporting is unavailable, contact the maintainer through an approved security contact channel.
+
+Do not disclose credential values in public GitHub issues.
+
+### 3. Provide Relevant Information
+
+Responsible disclosure should include:
+
+- Affected repository.
+- File path.
+- Line number.
+- Commit hash.
+- Credential type.
+- Recommended remediation steps.
+
+Repository owners should be advised to rotate or revoke affected credentials and remove sensitive information from Git history.
+
+### 4. Protect Research Data
+
+- Do not publish plaintext credentials.
+- Do not commit sensitive scan outputs to GitHub.
+- Restrict access to research datasets.
+- Use redacted records in reports and presentations.
+
+---
+
+## 🔍 What This Pipeline Deliberately Does NOT Do
+
+| Limitation | Description |
+|---|---|
+| No Credential Verification | Does not test credentials against live services or attempt authentication. |
+| No Automated Reporting | Does not automatically email or message repository maintainers. |
+| No Unauthorized Access | Does not use discovered credentials to access third-party accounts or systems. |
+| No Guarantee of Validity | A detected credential may be expired, synthetic, or a false positive. |
+
+All findings require appropriate review before responsible disclosure.
+
+---
+
+## 🎯 Research Objective
+
+The objective of this project is to study accidental credential exposure in GitHub repositories, understand the limitations of automated secret detection, reduce false positives, and support responsible vulnerability disclosure.
+
+The pipeline provides a structured approach to repository sampling, secret detection, credential classification, noise reduction, and research reporting.
+
+---
+
+**For educational, authorized security research, and responsible disclosure purposes only.**
