@@ -22,7 +22,7 @@ The pipeline consists of five main stages:
 
 ### Pipeline Workflow
 
-**Repository Discovery → Secret Scanning → Credential Analysis → Noise Filtering → Excel Reporting**
+**Repository Discovery → Secret Scanning → Credential Analysis → Noise Filtering → Excel Reporting → Data Preparation → Live Verification → Data Exploration**
 
 ---
 
@@ -56,13 +56,19 @@ Using a virtual environment is recommended to avoid dependency conflicts.
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install pandas openpyxl
+pip install pandas openpyxl pymongo psycopg2-binary PyMySQL redis requests
 ```
 
 | Library | Purpose |
 |---|---|
 | pandas | Data processing, analysis, and consolidation |
 | openpyxl | Excel spreadsheet generation |
+| pymongo | MongoDB driver for live verification, authentication, and read-only exploration. |
+| psycopg2-binary | PostgreSQL driver for live verification and connection testing. |
+| PyMySQL | MySQL/MariaDB driver for live verification and connection testing. |
+| redis | Redis/KeyDB driver for live verification and connection testing. |
+| requests | HTTP client for verifying Basic Auth credentials in web services and APIs. |
+
 
 ---
 
