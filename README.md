@@ -17,6 +17,8 @@ The pipeline consists of five main stages:
 | 3. Credential Analysis | Identify potential username-password exposures and other credential types. |
 | 4. Noise Filtering | Remove known placeholders, test fixtures, and irrelevant findings. |
 | 5. Reporting | Consolidate research findings into a structured Excel report. |
+| 6. Live Verification | Actively test credentials against live services to identify valid exposures. |
+| 7. Data Exploration | Explore live databases to catalog data scope and sensitive fields. |
 
 ### Pipeline Workflow
 
@@ -246,6 +248,9 @@ This stage provides the raw evidence required for impact assessment and disclosu
 | `check_secrets.py` | Processes scanner results and identifies credential-related findings. |
 | `filter_credentials.py` | Filters placeholders, default credentials, test fixtures, and other noise. |
 | `make_excel.py` | Consolidates research findings into an Excel spreadsheet. |
+| `prepare_findings.py` | Converts consolidated Excel findings into a standardized CSV format for verification. |
+| `db_tester.py` | Performs active live-verification of credentials against target services. |
+| `db_read_only_explore.py` | Explores live databases to extract sensitive data and generate structured reports. |
 
 ### Input and Output Files
 
@@ -256,6 +261,9 @@ This stage provides the raw evidence required for impact assessment and disclosu
 | `credentials_seed5.jsonl` | Intermediate credential-analysis records. |
 | `worth_investigating_seed5.jsonl` | Filtered findings requiring further review. |
 | `all_investigating_credentials.xlsx` | Consolidated research spreadsheet. |
+| `findings_annotated.csv` | Standardized CSV output from `prepare_findings.py`. |
+| `verified_credentials.csv` | Active verification results (status, latency, errors). |
+| `db_exploration_results.xlsx` | Final exploration report containing sampled data and sensitive field inventory. |
 
 Generated files containing sensitive information should be excluded from version control.
 
@@ -286,6 +294,18 @@ The objective is to retain higher-signal findings for responsible manual review.
 ### `make_excel.py`
 
 Uses pandas and openpyxl to consolidate research records from multiple `worth_investigating` files into a structured Excel spreadsheet.
+
+### `prepare_findings.py`**
+
+Normalizes the consolidated Excel data into a CSV format. It handles column mapping, whitespace stripping, and ensures the schema matches the requirements of the verification engine.
+
+### `db_tester.py`
+
+Implements a concurrent verification engine using `concurrent.futures`. It parses connection strings to extract host, port, and credentials, then performs DNS lookups and TCP socket checks to filter unreachable hosts. For reachable hosts, it initiates protocol-specific authentication handshakes (MongoDB, PostgreSQL, etc.) to classify credentials as `SUCCESS`, `INVALID_CREDENTIALS`, or `UNREACHABLE`.
+
+### `db_read_only_explore.py`
+
+For verified `SUCCESS` credentials, this script performs a read-only exploration of the target database. It enumerates collections, samples documents, and flattens nested JSON structures into tabular formats. It includes a sensitive field detector that flags values matching patterns for passwords, emails, and API keys, appending the results to a multi-sheet Excel workbook.
 
 ---
 
